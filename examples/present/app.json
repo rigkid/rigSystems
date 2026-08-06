@@ -1,0 +1,19 @@
+{
+  "name": "present",
+  "version": "0.1.0",
+  "license": "MIT rigkid",
+  "description": "rigSystems: Hierarchy + Shape Present",
+  "window": { "width": 800, "height": 600, "title": "rigSystems: Present" },
+  "dependencies": [
+    {
+      "name": "rigComponent",
+      "url": "https://github.com/rigkid/rigComponent.git",
+      "ref": "main"
+    },
+    {
+      "name": "rigSystems",
+      "url": "https://github.com/rigkid/rigSystems.git",
+      "ref": "main"
+    }
+  ]
+}
