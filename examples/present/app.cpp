@@ -6,7 +6,6 @@
 
 #include "core/RigKitEngine.h"
 #include "core/pack/MPack.h"
-#include "packs/rigComponent/src/CShape.h"
 #include "packs/rigComponent/src/CTransform.h"
 #include "packs/rigComponent/src/rig.h"
 #include "packs/rigComponent/src/rigComponent.h"
@@ -39,8 +38,7 @@ CDrawStyle accentDisc() {
  *
  * The transform carries the offset, because that is what the parent turns.
  * Shape coordinates ride the parent's translation and scale but not its turn,
- * so the centring belongs in the shape box — a circle centred by transform
- * position instead would drift off its own orbit as the parent swings.
+ * so the circle stays centred on its own origin and orbits by transform alone.
  */
 entt::entity circleAt(entt::entity parent, float distance, float radius, const CDrawStyle& style,
 					  const std::string& name) {
@@ -51,11 +49,6 @@ entt::entity circleAt(entt::entity parent, float distance, float radius, const C
 	auto e = rig::makeCircle(0.f, 0.f, radius, style, name);
 	rig::parentTo(e, parent);
 	ecs->getComponent<rigkit::ecs::CTransform>(e).position = {distance, 0.f, 0.f};
-	auto& shape = ecs->getComponent<rigkit::ecs::CShape>(e);
-	shape.x1 = -radius;
-	shape.y1 = -radius;
-	shape.x2 = radius;
-	shape.y2 = radius;
 	return e;
 }
 

@@ -3,20 +3,27 @@
 #include <cmath>
 #include <string>
 #include <vector>
+#include "CArc.h"
 #include "CCamera.h"
 #include "CDrawStyle.h"
+#include "CEllipse.h"
+#include "CLine.h"
 #include "CMesh.h"
+#include "CPolygon.h"
+#include "CRectangle.h"
+#include "CRegularPolygon.h"
+#include "CRing.h"
 #include "CSelection.h"
-#include "CShape.h"
+#include "CStar.h"
 #include "CTransform.h"
+#include "PrimitiveBounds.h"
+#include "PrimitiveVertices.h"
 #include "SHierarchy.h"
 #include "rendering/IRenderer.h"
 
 namespace rigkit {
 namespace ecs {
 namespace {
-
-constexpr float kTwoPi = 6.28318530717958647692f;
 
 Paint fillPaint(const CDrawStyle& style) {
 	return Paint::fill({style.fillR, style.fillG, style.fillB, style.fillA});
@@ -34,20 +41,24 @@ glm::vec2 toWorld(const CTransform& transform, float localX, float localY) {
 	return {t.x + localX * s.x, t.y + localY * s.y};
 }
 
-/** Ring of @p count points alternating between @p outer and @p inner radius. */
-std::vector<glm::vec2> radialPoints(glm::vec2 center, float outer, float inner, int count) {
-	std::vector<glm::vec2> points;
-	if (count < 3) {
-		return points;
+/** Map a whole local point list through CTransform::world. */
+std::vector<glm::vec2> toWorldAll(const CTransform& transform,
+								  const std::vector<glm::vec2>& local) {
+	std::vector<glm::vec2> world;
+	world.reserve(local.size());
+	for (const auto& p : local) {
+		world.push_back(toWorld(transform, p.x, p.y));
 	}
-	points.reserve(static_cast<size_t>(count));
-	for (int i = 0; i < count; ++i) {
-		const float angle = kTwoPi * static_cast<float>(i) / static_cast<float>(count);
-		const float radius = (i % 2 == 0) ? outer : inner;
-		points.emplace_back(center.x + radius * std::cos(angle),
-							center.y + radius * std::sin(angle));
+	return world;
+}
+
+/** Draw every entity carrying @p TShape through @p draw. */
+template <typename TShape, typename TDraw> void presentShapes(MEcs& ecs, TDraw&& draw) {
+	auto view = ecs.view<ecs::CTransform, TShape, ecs::CDrawStyle>();
+	for (auto entity : view) {
+		draw(view.template get<ecs::CTransform>(entity), view.template get<TShape>(entity),
+			 view.template get<ecs::CDrawStyle>(entity));
 	}
-	return points;
 }
 
 bool hasActiveCamera(MEcs& ecs) {
@@ -77,53 +88,113 @@ struct Painter {
 		}
 	}
 
-	void shape(const CTransform& transform, const CShape& shape, const CDrawStyle& style) {
+	/** Open run of segments — no closing edge back to the first point. */
+	void polyline(const std::vector<glm::vec2>& points, const CDrawStyle& style) {
+		if (!style.hasStroke || points.size() < 2) {
+			return;
+		}
+		const Paint paint = strokePaint(style);
+		for (size_t i = 0; i + 1 < points.size(); ++i) {
+			out.drawLine(points[i].x, points[i].y, points[i + 1].x, points[i + 1].y, paint);
+		}
+	}
+
+	void rectangle(const CTransform& transform, const CRectangle& shape, const CDrawStyle& style) {
 		const glm::vec2 scale = transform.worldScale2D();
-		const glm::vec2 origin = toWorld(transform, shape.x1, shape.y1);
-		const float width = (shape.x2 - shape.x1) * scale.x;
-		const float height = (shape.y2 - shape.y1) * scale.y;
-
-		switch (shape.type) {
-		case CShape::Type::Rectangle:
-			if (style.hasFill) {
-				out.drawRect(origin.x, origin.y, width, height, fillPaint(style));
-			}
-			if (style.hasStroke) {
-				out.drawRect(origin.x, origin.y, width, height, strokePaint(style));
-			}
-			break;
-
-		case CShape::Type::Ellipse: {
-			const float centerX = origin.x + width * 0.5f;
-			const float centerY = origin.y + height * 0.5f;
-			if (style.hasFill) {
-				out.drawEllipse(centerX, centerY, width, height, fillPaint(style));
-			}
-			if (style.hasStroke) {
-				out.drawEllipse(centerX, centerY, width, height, strokePaint(style));
-			}
-			break;
+		const glm::vec2 origin = toWorld(transform, shape.x, shape.y);
+		const float width = shape.width * scale.x;
+		const float height = shape.height * scale.y;
+		// IRenderer has no rounded-rect primitive, so cornerRadius survives the
+		// round trip but does not yet show in the present pass.
+		if (style.hasFill) {
+			out.drawRect(origin.x, origin.y, width, height, fillPaint(style));
 		}
+		if (style.hasStroke) {
+			out.drawRect(origin.x, origin.y, width, height, strokePaint(style));
+		}
+	}
 
-		case CShape::Type::Line:
-			if (style.hasStroke) {
-				const glm::vec2 end = toWorld(transform, shape.x2, shape.y2);
-				out.drawLine(origin.x, origin.y, end.x, end.y, strokePaint(style));
+	void ellipse(const CTransform& transform, const CEllipse& shape, const CDrawStyle& style) {
+		const glm::vec2 scale = transform.worldScale2D();
+		const glm::vec2 center = toWorld(transform, shape.cx, shape.cy);
+		const float width = shape.rx * 2.0f * scale.x;
+		const float height = shape.ry * 2.0f * scale.y;
+		if (style.hasFill) {
+			out.drawEllipse(center.x, center.y, width, height, fillPaint(style));
+		}
+		if (style.hasStroke) {
+			out.drawEllipse(center.x, center.y, width, height, strokePaint(style));
+		}
+	}
+
+	void line(const CTransform& transform, const CLine& shape, const CDrawStyle& style) {
+		if (!style.hasStroke) {
+			return;
+		}
+		const glm::vec2 start = toWorld(transform, shape.x1, shape.y1);
+		const glm::vec2 end = toWorld(transform, shape.x2, shape.y2);
+		out.drawLine(start.x, start.y, end.x, end.y, strokePaint(style));
+	}
+
+	void polygon(const CTransform& transform, const CPolygon& shape, const CDrawStyle& style) {
+		if (shape.points.size() < 3) {
+			return;
+		}
+		const auto world = toWorldAll(transform, shape.points);
+		if (shape.closed) {
+			outline(world, style);
+		} else {
+			polyline(world, style);
+		}
+	}
+
+	void regularPolygon(const CTransform& transform, const CRegularPolygon& shape,
+						const CDrawStyle& style) {
+		outline(toWorldAll(transform, verticesOf(shape)), style);
+	}
+
+	void star(const CTransform& transform, const CStar& shape, const CDrawStyle& style) {
+		outline(toWorldAll(transform, verticesOf(shape)), style);
+	}
+
+	void arc(const CTransform& transform, const CArc& shape, const CDrawStyle& style) {
+		const auto world = toWorldAll(transform, verticesOf(shape));
+		// A pie already ends at the centre, so closing it completes the wedge.
+		if (shape.pie) {
+			outline(world, style);
+		} else {
+			polyline(world, style);
+		}
+	}
+
+	void ring(const CTransform& transform, const CRing& shape, const CDrawStyle& style) {
+		std::vector<glm::vec2> outerLocal;
+		std::vector<glm::vec2> innerLocal;
+		rimsOf(shape, outerLocal, innerLocal);
+		if (outerLocal.empty()) {
+			return;
+		}
+		const auto outerWorld = toWorldAll(transform, outerLocal);
+		const auto innerWorld = toWorldAll(transform, innerLocal);
+
+		if (style.hasFill) {
+			// No annulus primitive exists, so the hole comes from banding the gap
+			// between the rims rather than overdrawing a disc.
+			const Paint paint = fillPaint(style);
+			const size_t count = outerWorld.size();
+			for (size_t i = 0; i < count; ++i) {
+				const size_t next = (i + 1) % count;
+				out.drawTriangle(outerWorld[i].x, outerWorld[i].y, outerWorld[next].x,
+								 outerWorld[next].y, innerWorld[i].x, innerWorld[i].y, paint);
+				out.drawTriangle(innerWorld[i].x, innerWorld[i].y, outerWorld[next].x,
+								 outerWorld[next].y, innerWorld[next].x, innerWorld[next].y,
+								 paint);
 			}
-			break;
-
-		case CShape::Type::Polygon: {
-			const float radius = (shape.x2 - shape.x1) * scale.x;
-			outline(radialPoints(origin, radius, radius, shape.sides), style);
-			break;
 		}
-
-		case CShape::Type::Star: {
-			const float outer = (shape.x2 - shape.x1) * scale.x;
-			const float inner = outer * shape.innerRadius;
-			outline(radialPoints(origin, outer, inner, shape.sides * 2), style);
-			break;
-		}
+		if (style.hasStroke) {
+			const Paint paint = strokePaint(style);
+			out.drawPolygon(outerWorld, paint);
+			out.drawPolygon(innerWorld, paint);
 		}
 	}
 
@@ -188,30 +259,24 @@ struct Painter {
 };
 
 void selectionOverlay(MEcs& ecs, Painter& painter) {
-	auto shapes = ecs.view<ecs::CTransform, ecs::CShape, ecs::CSelection>();
+	auto shapes = ecs.view<ecs::CTransform, ecs::CSelection>();
 	for (auto entity : shapes) {
 		const auto& selection = shapes.get<ecs::CSelection>(entity);
 		if (!selection.isSelected && !selection.isMultiSelected) {
 			continue;
 		}
-		const auto& transform = shapes.get<ecs::CTransform>(entity);
-		const auto& shape = shapes.get<ecs::CShape>(entity);
-		const glm::vec2 scale = transform.worldScale2D();
-		const glm::vec2 origin = toWorld(transform, shape.x1, shape.y1);
-
-		if (shape.type == ecs::CShape::Type::Line) {
-			const float pad = 4.f;
-			const glm::vec2 end = toWorld(transform, shape.x2, shape.y2);
-			const float minX = std::min(origin.x, end.x);
-			const float minY = std::min(origin.y, end.y);
-			const float maxX = std::max(origin.x, end.x);
-			const float maxY = std::max(origin.y, end.y);
-			painter.bounds(minX - pad, minY - pad, (maxX - minX) + pad * 2.f,
-						   (maxY - minY) + pad * 2.f);
-		} else {
-			painter.bounds(origin.x, origin.y, (shape.x2 - shape.x1) * scale.x,
-						   (shape.y2 - shape.y1) * scale.y);
+		const Bounds2D local = shapeBounds2D(ecs, entity);
+		if (!local.valid) {
+			continue;
 		}
+		const auto& transform = shapes.get<ecs::CTransform>(entity);
+		const glm::vec2 min = toWorld(transform, local.min.x, local.min.y);
+		const glm::vec2 max = toWorld(transform, local.max.x, local.max.y);
+		// A line or a flat arc has no area on one axis, so an unpadded box would
+		// collapse and never draw.
+		const float pad = ((max.x - min.x) < 1.f || (max.y - min.y) < 1.f) ? 4.f : 0.f;
+		painter.bounds(min.x - pad, min.y - pad, (max.x - min.x) + pad * 2.f,
+					   (max.y - min.y) + pad * 2.f);
 	}
 
 	if (hasActiveCamera(ecs)) {
@@ -253,11 +318,32 @@ void SShapeRendering(MEcs& ecs) {
 	// without re-entering Update.
 	SHierarchy(ecs);
 
-	auto shapes = ecs.view<ecs::CTransform, ecs::CShape, ecs::CDrawStyle>();
-	for (auto entity : shapes) {
-		painter.shape(shapes.get<ecs::CTransform>(entity), shapes.get<ecs::CShape>(entity),
-					  shapes.get<ecs::CDrawStyle>(entity));
-	}
+	using Xf = ecs::CTransform;
+	using Style = ecs::CDrawStyle;
+	presentShapes<ecs::CRectangle>(
+		ecs, [&](const Xf& xf, const ecs::CRectangle& s, const Style& st) {
+			painter.rectangle(xf, s, st);
+		});
+	presentShapes<ecs::CEllipse>(
+		ecs, [&](const Xf& xf, const ecs::CEllipse& s, const Style& st) {
+			painter.ellipse(xf, s, st);
+		});
+	presentShapes<ecs::CLine>(
+		ecs, [&](const Xf& xf, const ecs::CLine& s, const Style& st) { painter.line(xf, s, st); });
+	presentShapes<ecs::CPolygon>(
+		ecs, [&](const Xf& xf, const ecs::CPolygon& s, const Style& st) {
+			painter.polygon(xf, s, st);
+		});
+	presentShapes<ecs::CRegularPolygon>(
+		ecs, [&](const Xf& xf, const ecs::CRegularPolygon& s, const Style& st) {
+			painter.regularPolygon(xf, s, st);
+		});
+	presentShapes<ecs::CStar>(
+		ecs, [&](const Xf& xf, const ecs::CStar& s, const Style& st) { painter.star(xf, s, st); });
+	presentShapes<ecs::CArc>(
+		ecs, [&](const Xf& xf, const ecs::CArc& s, const Style& st) { painter.arc(xf, s, st); });
+	presentShapes<ecs::CRing>(
+		ecs, [&](const Xf& xf, const ecs::CRing& s, const Style& st) { painter.ring(xf, s, st); });
 
 	// Active camera ⇒ rigRender3D owns mesh present (keep 2D shape path for shapes).
 	// Plot Toolpath 3D / scene-prop meshes stay in ECS for panel FBO present only —
