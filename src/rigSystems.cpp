@@ -14,10 +14,7 @@
 
 namespace rigkit {
 
-rigSystems::rigSystems() : IPack("rigSystems") {
-	setDescription("ECS Update/Draw systems (fulfillment over rigComponent data)");
-	addDependency("rigComponent");
-}
+rigSystems::rigSystems() : IPack("rigSystems") {}
 
 bool rigSystems::init() {
 	spdlog::info("[rigSystems] init");
