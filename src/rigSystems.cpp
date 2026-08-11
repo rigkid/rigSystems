@@ -2,7 +2,10 @@
 #include <spdlog/spdlog.h>
 #include "SCanvas.h"
 #include "SHierarchy.h"
+#include "SModulators.h"
+#include "SOrbitDrive.h"
 #include "SShapeRendering.h"
+#include "STweens.h"
 #include "core/RigKitEngine.h"
 #include "core/canvas/MCanvas.h"
 #include "core/pack/PackRegistry.h"
@@ -33,6 +36,9 @@ void rigSystems::setup() {
 
 	ecs->registerSystem("SHierarchy", SystemPhase::Update, rigkit::ecs::SHierarchy);
 	ecs->registerSystem("SCanvasUpdate", SystemPhase::Update, rigkit::ecs::SCanvasUpdate);
+	ecs->registerSystem("SModulators", SystemPhase::Update, rigkit::ecs::SModulators);
+	ecs->registerSystem("STweens", SystemPhase::Update, rigkit::ecs::STweens);
+	ecs->registerSystem("SOrbitDrive", SystemPhase::Update, rigkit::ecs::SOrbitDrive);
 
 	// FBO / active Canvas present (no-op when no active canvas).
 	ecs->registerSystem("SCanvasRender", SystemPhase::Draw, [engine](MEcs& e) {

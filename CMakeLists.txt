@@ -22,6 +22,12 @@ add_library(${PACK_NAME} STATIC
 	src/SCanvas.h
 	src/SHierarchy.cpp
 	src/SHierarchy.h
+	src/SModulators.cpp
+	src/SModulators.h
+	src/SOrbitDrive.cpp
+	src/SOrbitDrive.h
+	src/STweens.cpp
+	src/STweens.h
 	src/SShapeRendering.cpp
 	src/SShapeRendering.h
 )

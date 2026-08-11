@@ -4,6 +4,9 @@
 
 ECS Update/Draw fulfillment over [rigComponent](https://github.com/rigkid/rigComponent) data.
 
+Update: `SHierarchy`, `SCanvasUpdate`, `SModulators`, `STweens`, `SOrbitDrive`.
+Draw: `SCanvasRender`, `SShapeRendering`.
+
 ## Example
 
 [examples/present](examples/present/): Hierarchy orbit + Shapes.
