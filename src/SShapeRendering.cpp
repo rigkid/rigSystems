@@ -14,6 +14,7 @@
 #include "CRegularPolygon.h"
 #include "CRing.h"
 #include "CSelection.h"
+#include "CSpline.h"
 #include "CStar.h"
 #include "CTransform.h"
 #include "PrimitiveBounds.h"
@@ -165,6 +166,10 @@ struct Painter {
 		} else {
 			polyline(world, style);
 		}
+	}
+
+	void spline(const CTransform& transform, const CSpline& shape, const CDrawStyle& style) {
+		polyline(toWorldAll(transform, verticesOf(shape)), style);
 	}
 
 	void ring(const CTransform& transform, const CRing& shape, const CDrawStyle& style) {
@@ -342,6 +347,10 @@ void SShapeRendering(MEcs& ecs) {
 		ecs, [&](const Xf& xf, const ecs::CStar& s, const Style& st) { painter.star(xf, s, st); });
 	presentShapes<ecs::CArc>(
 		ecs, [&](const Xf& xf, const ecs::CArc& s, const Style& st) { painter.arc(xf, s, st); });
+	presentShapes<ecs::CSpline>(
+		ecs, [&](const Xf& xf, const ecs::CSpline& s, const Style& st) {
+			painter.spline(xf, s, st);
+		});
 	presentShapes<ecs::CRing>(
 		ecs, [&](const Xf& xf, const ecs::CRing& s, const Style& st) { painter.ring(xf, s, st); });
 
