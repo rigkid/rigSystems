@@ -6,6 +6,8 @@
 #include "CArc.h"
 #include "CCamera.h"
 #include "CDrawStyle.h"
+#include "CLayer.h"
+#include "CRelationship.h"
 #include "CEllipse.h"
 #include "CLine.h"
 #include "CMesh.h"
@@ -53,10 +55,28 @@ std::vector<glm::vec2> toWorldAll(const CTransform& transform,
 	return world;
 }
 
+bool hiddenByLayer(MEcs& ecs, entt::entity e) {
+	auto& reg = ecs.registry();
+	int guard = 0;
+	while (e != entt::null && reg.valid(e) && guard++ < 64) {
+		if (reg.all_of<ecs::CLayer>(e) && !reg.get<ecs::CLayer>(e).visible) {
+			return true;
+		}
+		if (!reg.all_of<ecs::CRelationship>(e)) {
+			break;
+		}
+		e = reg.get<ecs::CRelationship>(e).parent;
+	}
+	return false;
+}
+
 /** Draw every entity carrying @p TShape through @p draw. */
 template <typename TShape, typename TDraw> void presentShapes(MEcs& ecs, TDraw&& draw) {
 	auto view = ecs.view<ecs::CTransform, TShape, ecs::CDrawStyle>();
 	for (auto entity : view) {
+		if (hiddenByLayer(ecs, entity)) {
+			continue;
+		}
 		draw(view.template get<ecs::CTransform>(entity), view.template get<TShape>(entity),
 			 view.template get<ecs::CDrawStyle>(entity));
 	}
@@ -270,6 +290,9 @@ void selectionOverlay(MEcs& ecs, Painter& painter) {
 		if (!selection.isSelected && !selection.isMultiSelected) {
 			continue;
 		}
+		if (hiddenByLayer(ecs, entity)) {
+			continue;
+		}
 		const Bounds2D local = shapeBounds2D(ecs, entity);
 		if (!local.valid) {
 			continue;
@@ -292,6 +315,9 @@ void selectionOverlay(MEcs& ecs, Painter& painter) {
 	for (auto entity : meshes) {
 		const auto& selection = meshes.get<ecs::CSelection>(entity);
 		if (!selection.isSelected && !selection.isMultiSelected) {
+			continue;
+		}
+		if (hiddenByLayer(ecs, entity)) {
 			continue;
 		}
 		const auto& transform = meshes.get<ecs::CTransform>(entity);
@@ -360,6 +386,9 @@ void SShapeRendering(MEcs& ecs) {
 	if (!hasActiveCamera(ecs)) {
 		auto meshes = ecs.view<ecs::CTransform, ecs::CMesh, ecs::CDrawStyle>();
 		for (auto entity : meshes) {
+			if (hiddenByLayer(ecs, entity)) {
+				continue;
+			}
 			const std::string name = ecs.entityName(entity);
 			if (name.rfind("toolpath3d-", 0) == 0 || name.rfind("scene-prop:", 0) == 0) {
 				continue;
