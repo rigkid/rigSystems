@@ -26,6 +26,8 @@ add_library(${PACK_NAME} STATIC
 	src/SModulators.h
 	src/SOrbitDrive.cpp
 	src/SOrbitDrive.h
+	src/OrbitNav.cpp
+	src/OrbitNav.h
 	src/STweens.cpp
 	src/STweens.h
 	src/SShapeRendering.cpp

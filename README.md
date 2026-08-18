@@ -7,6 +7,9 @@ ECS Update/Draw fulfillment over [rigComponent](https://github.com/rigkid/rigCom
 Update: `SHierarchy`, `SCanvasUpdate`, `SModulators`, `STweens`, `SOrbitDrive`.
 Draw: `SCanvasRender`, `SShapeRendering`.
 
+Orbit mouse nav (not a system — needs a per-frame input POD): `rig::orbitNavigate` /
+`orbitFrameMeshes` in `OrbitNav.h`. Bindings stay in the app.
+
 ## Example
 
 [examples/present](examples/present/): Hierarchy orbit + Shapes.

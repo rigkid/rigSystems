@@ -7,8 +7,8 @@ namespace ecs {
 
 /**
  * @brief Pose `CTransform` from `COrbitDrive` each Update (yaw around target).
- * @details Writes eye position + lookAt rotation. Pause by setting `enabled` false
- * or `speed` to 0. Hosts should not hand-roll the same lookAt loop.
+ * @details Spherical eye via `pitch` / `yaw` / `radius`. Pause with `enabled`
+ * false or `speed` 0. Mouse orbit / pan / dolly is `rig::orbitNavigate`.
  */
 void SOrbitDrive(MEcs& ecs, float dt);
 
