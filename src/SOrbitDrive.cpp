@@ -9,20 +9,6 @@
 
 namespace rigkit {
 namespace ecs {
-namespace {
-
-constexpr float kPitchLimit = 1.4f;
-
-glm::vec3 orbitEye(const COrbitDrive& orbit) {
-	const float cp = std::cos(orbit.pitch);
-	const float sp = std::sin(orbit.pitch);
-	const float sy = std::sin(orbit.yaw);
-	const float cy = std::cos(orbit.yaw);
-	const float r = orbit.radius;
-	return orbit.target + glm::vec3{sy * cp * r, sp * r, cy * cp * r};
-}
-
-} // namespace
 
 void SOrbitDrive(MEcs& ecs, float dt) {
 	for (auto e : ecs.view<ecs::COrbitDrive, ecs::CTransform>()) {
@@ -32,9 +18,10 @@ void SOrbitDrive(MEcs& ecs, float dt) {
 		}
 		orbit.speed = std::max(0.f, orbit.speed);
 		orbit.radius = std::max(0.01f, orbit.radius);
-		orbit.pitch = std::clamp(orbit.pitch, -kPitchLimit, kPitchLimit);
 		orbit.yaw += dt * orbit.speed;
-		rig::lookAt(ecs.getComponent<ecs::CTransform>(e), orbitEye(orbit), orbit.target);
+		const glm::vec3 eye{std::sin(orbit.yaw) * orbit.radius, orbit.height,
+							std::cos(orbit.yaw) * orbit.radius};
+		rig::lookAt(ecs.getComponent<ecs::CTransform>(e), eye, orbit.target);
 	}
 }
 
