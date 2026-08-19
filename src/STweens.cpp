@@ -12,13 +12,13 @@ namespace {
 
 float ease(float t, const std::string& name) {
 	t = std::clamp(t, 0.f, 1.f);
-	if (name == "easeIn") {
+	if (name == "ease-in") {
 		return t * t;
 	}
-	if (name == "easeOut") {
+	if (name == "ease-out") {
 		return 1.f - (1.f - t) * (1.f - t);
 	}
-	if (name == "easeInOut") {
+	if (name == "ease-in-out") {
 		return t < 0.5f ? 2.f * t * t : 1.f - std::pow(-2.f * t + 2.f, 2.f) * 0.5f;
 	}
 	return t;
