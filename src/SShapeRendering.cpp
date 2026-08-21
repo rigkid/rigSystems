@@ -18,6 +18,7 @@
 #include "CSelection.h"
 #include "CSpline.h"
 #include "CStar.h"
+#include "CTransient.h"
 #include "CTransform.h"
 #include "PrimitiveBounds.h"
 #include "PrimitiveVertices.h"
@@ -381,16 +382,18 @@ void SShapeRendering(MEcs& ecs) {
 		ecs, [&](const Xf& xf, const ecs::CRing& s, const Style& st) { painter.ring(xf, s, st); });
 
 	// Active camera ⇒ rigRender3D owns mesh present (keep 2D shape path for shapes).
-	// Plot Toolpath 3D / scene-prop meshes stay in ECS for panel FBO present only —
-	// never stroke them through the 2D IRenderer (that was crushing idle FPS).
+	// Session scaffolding (CTransient — toolpath previews) and scene-prop models
+	// stay in ECS for panel FBO present only — never stroke them through the 2D
+	// IRenderer. Name matching alone is not enough: duplicate names lose the
+	// name-map slot, which left giant preview meshes in the 2D path.
 	if (!hasActiveCamera(ecs)) {
 		auto meshes = ecs.view<ecs::CTransform, ecs::CMesh, ecs::CDrawStyle>();
 		for (auto entity : meshes) {
-			if (hiddenByLayer(ecs, entity)) {
+			if (ecs.registry().all_of<ecs::CTransient>(entity) || hiddenByLayer(ecs, entity)) {
 				continue;
 			}
 			const std::string name = ecs.entityName(entity);
-			if (name.rfind("toolpath3d-", 0) == 0 || name.rfind("scene-prop:", 0) == 0) {
+			if (name.rfind("scene-prop:", 0) == 0) {
 				continue;
 			}
 			painter.mesh(meshes.get<ecs::CTransform>(entity), meshes.get<ecs::CMesh>(entity),

@@ -1,7 +1,9 @@
 #include "OrbitNav.h"
 
 #include <glm/gtc/matrix_inverse.hpp>
+#include <glm/gtc/quaternion.hpp>
 
+#include "CCamera.h"
 #include "CMesh.h"
 #include "COrbitDrive.h"
 #include "CSelection.h"
@@ -26,7 +28,9 @@ glm::vec3 orbitEye(const rigkit::ecs::COrbitDrive& orbit) {
 
 void clampOrbit(rigkit::ecs::COrbitDrive& orbit) {
 	orbit.pitch = std::clamp(orbit.pitch, -kOrbitPitchLimit, kOrbitPitchLimit);
-	orbit.radius = std::clamp(orbit.radius, kOrbitRadiusMin, kOrbitRadiusMax);
+	if (orbit.radius < 1e-3f) {
+		orbit.radius = 1e-3f;
+	}
 	orbit.height = std::sin(orbit.pitch) * orbit.radius;
 }
 
@@ -66,18 +70,32 @@ void orbitNavigate(rigkit::MEcs& ecs, entt::entity cam, const OrbitNavFrame& fra
 		state.dragging = false;
 		return;
 	}
+	auto& orbit = ecs.getComponent<rigkit::ecs::COrbitDrive>(cam);
+	// Wheel is not a drag — apply even when gizmo/UI blocked the buttons.
+	if (std::fabs(frame.wheel) > 1e-4f) {
+		orbit.enabled = false;
+		const float factor = frame.wheel > 0.f ? 0.9f : 1.1f;
+		if (frame.havePivot) {
+			// Zoom anchored under the cursor: scale the rig about the pivot so
+			// the picked point keeps its screen position.
+			orbit.target = frame.pivot + (orbit.target - frame.pivot) * factor;
+		}
+		orbit.radius *= factor;
+		orbitApply(ecs, cam);
+	}
 	if (frame.blocked) {
 		state.dragging = false;
 		return;
 	}
 
-	auto& orbit = ecs.getComponent<rigkit::ecs::COrbitDrive>(cam);
 	const bool drag = frame.orbit || frame.pan || frame.dolly;
 	if (drag) {
 		if (!state.dragging) {
 			state.dragging = true;
 			state.lastX = frame.mouseX;
 			state.lastY = frame.mouseY;
+			state.pivot = frame.pivot;
+			state.havePivot = frame.havePivot;
 			orbit.enabled = false;
 		} else {
 			const float dx = frame.mouseX - state.lastX;
@@ -93,22 +111,82 @@ void orbitNavigate(rigkit::MEcs& ecs, entt::entity cam, const OrbitNavFrame& fra
 				const float cy = std::cos(orbit.yaw);
 				const glm::vec3 right{cy, 0.f, -sy};
 				const glm::vec3 up{-sy * sp, cp, -cy * sp};
-				orbit.target += (-dx * right + dy * up) * (orbit.radius * 0.0025f);
+				// Map pixels → world on the plane through the target so truck
+				// speed matches what is under the cursor (and stays sane on HiDPI).
+				float worldPerPixel = orbit.radius * 0.0025f;
+				if (frame.viewH > 1.f && ecs.hasComponent<rigkit::ecs::CCamera>(cam)) {
+					const auto& camPod = ecs.getComponent<rigkit::ecs::CCamera>(cam);
+					if (camPod.projection == rigkit::ecs::CCamera::Projection::Orthographic) {
+						worldPerPixel = camPod.orthoHeight / frame.viewH;
+					} else {
+						const float halfFov =
+							glm::radians(camPod.fovYDegrees) * 0.5f;
+						worldPerPixel =
+							(2.f * orbit.radius * std::tan(halfFov)) / frame.viewH;
+					}
+				}
+				orbit.target += (-dx * right + dy * up) * worldPerPixel;
 			} else {
-				orbit.yaw -= dx * 0.005f;
-				orbit.pitch += dy * 0.005f;
+				const float dYaw = -dx * 0.005f;
+				const float newPitch =
+					std::clamp(orbit.pitch + dy * 0.005f, -kOrbitPitchLimit, kOrbitPitchLimit);
+				if (state.havePivot) {
+					// Rotate the whole rig about the pivot picked at press so
+					// the content under the cursor stays the centre of the
+					// tumble: yaw about world up through the pivot, pitch about
+					// camera right through it, target riding the same rotation.
+					// The pitch angle flips because rotating about +right lowers
+					// the eye (pitch decreases) in this rig.
+					const glm::vec3 right{std::cos(orbit.yaw), 0.f, -std::sin(orbit.yaw)};
+					const glm::quat rot = glm::angleAxis(dYaw, glm::vec3(0.f, 1.f, 0.f)) *
+										  glm::angleAxis(orbit.pitch - newPitch, right);
+					orbit.target = state.pivot + rot * (orbit.target - state.pivot);
+				}
+				orbit.yaw += dYaw;
+				orbit.pitch = newPitch;
 			}
 			orbitApply(ecs, cam);
 		}
 	} else {
 		state.dragging = false;
 	}
+}
 
-	if (std::fabs(frame.wheel) > 1e-4f) {
-		orbit.enabled = false;
-		orbit.radius *= (frame.wheel > 0.f ? 0.9f : 1.1f);
-		orbitApply(ecs, cam);
+glm::vec3 orbitPickPivot(rigkit::MEcs& ecs, entt::entity cam, float ndcX, float ndcY,
+						 float aspect) {
+	glm::vec3 target{0.f};
+	float radius = 0.f;
+	if (cam != entt::null && ecs.hasComponent<rigkit::ecs::COrbitDrive>(cam)) {
+		const auto& orbit = ecs.getComponent<rigkit::ecs::COrbitDrive>(cam);
+		target = orbit.target;
+		radius = orbit.radius;
 	}
+	if (cam == entt::null || !ecs.hasComponent<rigkit::ecs::CCamera>(cam) ||
+		!ecs.hasComponent<rigkit::ecs::CTransform>(cam)) {
+		return target;
+	}
+	const auto& camPod = ecs.getComponent<rigkit::ecs::CCamera>(cam);
+	const glm::mat4 camToWorld = ecs.getComponent<rigkit::ecs::CTransform>(cam).localMatrix();
+	const glm::mat4 inv = glm::inverse(camPod.projectionMatrix(aspect) * glm::inverse(camToWorld));
+	glm::vec4 a = inv * glm::vec4(ndcX, ndcY, -1.f, 1.f);
+	glm::vec4 b = inv * glm::vec4(ndcX, ndcY, 1.f, 1.f);
+	if (std::abs(a.w) < 1e-8f || std::abs(b.w) < 1e-8f) {
+		return target;
+	}
+	a /= a.w;
+	b /= b.w;
+	const glm::vec3 origin{a};
+	const glm::vec3 dir = glm::normalize(glm::vec3(b - a));
+
+	if (std::abs(dir.y) > 1e-4f) {
+		const float t = -origin.y / dir.y;
+		if (t > 0.f && (radius <= 0.f || t < 16.f * radius)) {
+			return origin + dir * t;
+		}
+	}
+	const glm::vec3 fwd = -glm::normalize(glm::vec3(camToWorld[2]));
+	const float denom = std::max(glm::dot(dir, fwd), 1e-4f);
+	return origin + dir * (glm::dot(target - origin, fwd) / denom);
 }
 
 bool orbitFrame(rigkit::MEcs& ecs, entt::entity cam, const glm::vec3& bmin, const glm::vec3& bmax) {
