@@ -1,10 +1,11 @@
 #include "SCanvas.h"
-#include "CCanvas.h"
-#include "SShapeRendering.h"
+
 #include "core/canvas/Canvas.h"
 #include "core/canvas/MCanvas.h"
 #include "rendering/Graphics.h"
 #include "rendering/IRenderer.h"
+#include "CCanvas.h"
+#include "SShapeRendering.h"
 
 namespace rigkit {
 namespace ecs {

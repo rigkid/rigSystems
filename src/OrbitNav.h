@@ -1,5 +1,12 @@
 #pragma once
 
+/**
+ * @file
+ * @brief Orbit camera navigation: tumble, pan, dolly, pivot picking, and framing.
+ * @details Nothing here reads input devices — the app fills an `OrbitNavFrame` each frame and
+ * owns the `OrbitNavState` that carries a drag between frames.
+ */
+
 #include <glm/glm.hpp>
 
 #include "ecs/MEcs.h"

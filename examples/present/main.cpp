@@ -1,6 +1,8 @@
-#include <memory>
 #include "app.h"
+
 #include "core/RigKitEngine.h"
+
+#include <memory>
 
 int main(int argc, char* argv[]) {
 	auto app = std::make_unique<PresentApp>();

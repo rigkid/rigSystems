@@ -1,8 +1,5 @@
 #include "OrbitNav.h"
 
-#include <glm/gtc/matrix_inverse.hpp>
-#include <glm/gtc/quaternion.hpp>
-
 #include "CCamera.h"
 #include "CMesh.h"
 #include "COrbitDrive.h"
@@ -13,6 +10,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <glm/gtc/matrix_inverse.hpp>
+#include <glm/gtc/quaternion.hpp>
 
 namespace rig {
 namespace {

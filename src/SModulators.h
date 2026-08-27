@@ -1,5 +1,11 @@
 #pragma once
 
+/**
+ * @file
+ * @brief Update system that drives bound properties from `CModLfo` sources.
+ * @details Writes through `GetProperties()`, so any registered field can be a target.
+ */
+
 #include "ecs/MEcs.h"
 
 namespace rigkit {

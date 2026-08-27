@@ -1,16 +1,18 @@
 #include "rigSystems.h"
-#include <spdlog/spdlog.h>
+
+#include "core/RigKitEngine.h"
+#include "core/canvas/MCanvas.h"
+#include "core/pack/PackRegistry.h"
+#include "ecs/MEcs.h"
+#include "ecs/SystemRegistry.h"
 #include "SCanvas.h"
 #include "SHierarchy.h"
 #include "SModulators.h"
 #include "SOrbitDrive.h"
 #include "SShapeRendering.h"
 #include "STweens.h"
-#include "core/RigKitEngine.h"
-#include "core/canvas/MCanvas.h"
-#include "core/pack/PackRegistry.h"
-#include "ecs/MEcs.h"
-#include "ecs/SystemRegistry.h"
+
+#include <spdlog/spdlog.h>
 
 namespace rigkit {
 

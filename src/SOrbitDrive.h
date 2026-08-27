@@ -1,5 +1,11 @@
 #pragma once
 
+/**
+ * @file
+ * @brief Update system that poses a camera `CTransform` from its `COrbitDrive` fields.
+ * @details This is the automatic turntable; mouse-driven orbit is `rig::orbitNavigate`.
+ */
+
 #include "ecs/MEcs.h"
 
 namespace rigkit {

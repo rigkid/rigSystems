@@ -1,5 +1,11 @@
 #pragma once
 
+/**
+ * @file
+ * @brief Canvas systems: advance the `CCanvas` clock, then present shapes into its FBO.
+ * @details The Update half only moves numbers; only `SCanvasRender` binds the host Canvas.
+ */
+
 #include "ecs/MEcs.h"
 
 namespace rigkit {

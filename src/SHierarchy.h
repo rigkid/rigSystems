@@ -1,5 +1,11 @@
 #pragma once
 
+/**
+ * @file
+ * @brief World transform pass: fold local TRS through `CRelationship` parents into `world`.
+ * @details Run once in Update, before anything reads `CTransform::world`.
+ */
+
 #include "ecs/MEcs.h"
 
 namespace rigkit {

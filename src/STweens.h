@@ -1,5 +1,10 @@
 #pragma once
 
+/**
+ * @file
+ * @brief Update system that advances `CTween` and writes the result to its target property.
+ */
+
 #include "ecs/MEcs.h"
 
 namespace rigkit {

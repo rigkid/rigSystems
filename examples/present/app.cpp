@@ -1,15 +1,15 @@
 #include "app.h"
 
-#include <algorithm>
-#include <cmath>
-#include <string>
-
 #include "core/RigKitEngine.h"
 #include "core/pack/MPack.h"
 #include "packs/rigComponent/src/CTransform.h"
 #include "packs/rigComponent/src/rig.h"
 #include "packs/rigComponent/src/rigComponent.h"
 #include "packs/rigSystems/src/rigSystems.h"
+
+#include <algorithm>
+#include <cmath>
+#include <string>
 
 namespace {
 

@@ -1,29 +1,30 @@
 #include "SShapeRendering.h"
-#include <algorithm>
-#include <cmath>
-#include <string>
-#include <vector>
+
+#include "rendering/IRenderer.h"
 #include "CArc.h"
 #include "CCamera.h"
 #include "CDrawStyle.h"
-#include "CLayer.h"
-#include "CRelationship.h"
 #include "CEllipse.h"
+#include "CLayer.h"
 #include "CLine.h"
 #include "CMesh.h"
 #include "CPolygon.h"
 #include "CRectangle.h"
 #include "CRegularPolygon.h"
+#include "CRelationship.h"
 #include "CRing.h"
 #include "CSelection.h"
 #include "CSpline.h"
 #include "CStar.h"
-#include "CTransient.h"
 #include "CTransform.h"
+#include "CTransient.h"
 #include "PrimitiveBounds.h"
 #include "PrimitiveVertices.h"
 #include "SHierarchy.h"
-#include "rendering/IRenderer.h"
+
+#include <algorithm>
+#include <cmath>
+#include <vector>
 
 namespace rigkit {
 namespace ecs {
@@ -115,10 +116,13 @@ struct Painter {
 		if (!style.hasStroke || points.size() < 2) {
 			return;
 		}
-		const Paint paint = strokePaint(style);
+		std::vector<glm::vec2> pts;
+		pts.reserve((points.size() - 1) * 2);
 		for (size_t i = 0; i + 1 < points.size(); ++i) {
-			out.drawLine(points[i].x, points[i].y, points[i + 1].x, points[i + 1].y, paint);
+			pts.push_back(points[i]);
+			pts.push_back(points[i + 1]);
 		}
+		out.drawLines(pts, strokePaint(style));
 	}
 
 	void rectangle(const CTransform& transform, const CRectangle& shape, const CDrawStyle& style) {
@@ -213,8 +217,7 @@ struct Painter {
 				out.drawTriangle(outerWorld[i].x, outerWorld[i].y, outerWorld[next].x,
 								 outerWorld[next].y, innerWorld[i].x, innerWorld[i].y, paint);
 				out.drawTriangle(innerWorld[i].x, innerWorld[i].y, outerWorld[next].x,
-								 outerWorld[next].y, innerWorld[next].x, innerWorld[next].y,
-								 paint);
+								 outerWorld[next].y, innerWorld[next].x, innerWorld[next].y, paint);
 			}
 		}
 		if (style.hasStroke) {
@@ -229,7 +232,9 @@ struct Painter {
 			return;
 		}
 
-		// The index buffer is optional — without one, vertices draw in order.
+		// World-space verts, then one IRenderer call. OpenGL merges consecutive
+		// same-topology draws — no per-entity matrix, so the tiger stays one
+		// triangle batch and one line batch.
 		const size_t count = mesh.indices.empty() ? mesh.positions.size() : mesh.indices.size();
 		auto at = [&](size_t i) -> glm::vec2 {
 			const uint32_t index =
@@ -237,28 +242,33 @@ struct Painter {
 			const glm::vec3& p = mesh.positions[index];
 			return toWorld(transform, p.x, p.y);
 		};
-		auto segment = [&](size_t i0, size_t i1, const Paint& paint) {
-			const glm::vec2 a = at(i0);
-			const glm::vec2 b = at(i1);
-			out.drawLine(a.x, a.y, b.x, b.y, paint);
-		};
 
 		if (mesh.mode == CMesh::Mode::Triangles) {
 			if (style.hasFill) {
-				const Paint paint = fillPaint(style);
+				std::vector<glm::vec2> pts;
+				pts.reserve((count / 3) * 3);
 				for (size_t i = 0; i + 2 < count; i += 3) {
-					const glm::vec2 a = at(i);
-					const glm::vec2 b = at(i + 1);
-					const glm::vec2 c = at(i + 2);
-					out.drawTriangle(a.x, a.y, b.x, b.y, c.x, c.y, paint);
+					pts.push_back(at(i));
+					pts.push_back(at(i + 1));
+					pts.push_back(at(i + 2));
+				}
+				if (!pts.empty()) {
+					out.drawTriangles(pts, fillPaint(style));
 				}
 			}
 			if (style.hasStroke) {
-				const Paint paint = strokePaint(style);
+				std::vector<glm::vec2> pts;
+				pts.reserve((count / 3) * 6);
 				for (size_t i = 0; i + 2 < count; i += 3) {
-					segment(i, i + 1, paint);
-					segment(i + 1, i + 2, paint);
-					segment(i + 2, i, paint);
+					pts.push_back(at(i));
+					pts.push_back(at(i + 1));
+					pts.push_back(at(i + 1));
+					pts.push_back(at(i + 2));
+					pts.push_back(at(i + 2));
+					pts.push_back(at(i));
+				}
+				if (!pts.empty()) {
+					out.drawLines(pts, strokePaint(style));
 				}
 			}
 			return;
@@ -268,10 +278,15 @@ struct Painter {
 			return;
 		}
 		if (mesh.mode == CMesh::Mode::Lines || mesh.mode == CMesh::Mode::LineStrip) {
-			const Paint paint = strokePaint(style);
+			std::vector<glm::vec2> pts;
 			const size_t stride = (mesh.mode == CMesh::Mode::Lines) ? 2u : 1u;
+			pts.reserve((count / stride) * 2);
 			for (size_t i = 0; i + 1 < count; i += stride) {
-				segment(i, i + 1, paint);
+				pts.push_back(at(i));
+				pts.push_back(at(i + 1));
+			}
+			if (!pts.empty()) {
+				out.drawLines(pts, strokePaint(style));
 			}
 		}
 	}
@@ -352,20 +367,16 @@ void SShapeRendering(MEcs& ecs) {
 
 	using Xf = ecs::CTransform;
 	using Style = ecs::CDrawStyle;
-	presentShapes<ecs::CRectangle>(
-		ecs, [&](const Xf& xf, const ecs::CRectangle& s, const Style& st) {
-			painter.rectangle(xf, s, st);
-		});
-	presentShapes<ecs::CEllipse>(
-		ecs, [&](const Xf& xf, const ecs::CEllipse& s, const Style& st) {
-			painter.ellipse(xf, s, st);
-		});
+	presentShapes<ecs::CRectangle>(ecs, [&](const Xf& xf, const ecs::CRectangle& s,
+											const Style& st) { painter.rectangle(xf, s, st); });
+	presentShapes<ecs::CEllipse>(ecs, [&](const Xf& xf, const ecs::CEllipse& s, const Style& st) {
+		painter.ellipse(xf, s, st);
+	});
 	presentShapes<ecs::CLine>(
 		ecs, [&](const Xf& xf, const ecs::CLine& s, const Style& st) { painter.line(xf, s, st); });
-	presentShapes<ecs::CPolygon>(
-		ecs, [&](const Xf& xf, const ecs::CPolygon& s, const Style& st) {
-			painter.polygon(xf, s, st);
-		});
+	presentShapes<ecs::CPolygon>(ecs, [&](const Xf& xf, const ecs::CPolygon& s, const Style& st) {
+		painter.polygon(xf, s, st);
+	});
 	presentShapes<ecs::CRegularPolygon>(
 		ecs, [&](const Xf& xf, const ecs::CRegularPolygon& s, const Style& st) {
 			painter.regularPolygon(xf, s, st);
@@ -374,30 +385,25 @@ void SShapeRendering(MEcs& ecs) {
 		ecs, [&](const Xf& xf, const ecs::CStar& s, const Style& st) { painter.star(xf, s, st); });
 	presentShapes<ecs::CArc>(
 		ecs, [&](const Xf& xf, const ecs::CArc& s, const Style& st) { painter.arc(xf, s, st); });
-	presentShapes<ecs::CSpline>(
-		ecs, [&](const Xf& xf, const ecs::CSpline& s, const Style& st) {
-			painter.spline(xf, s, st);
-		});
+	presentShapes<ecs::CSpline>(ecs, [&](const Xf& xf, const ecs::CSpline& s, const Style& st) {
+		painter.spline(xf, s, st);
+	});
 	presentShapes<ecs::CRing>(
 		ecs, [&](const Xf& xf, const ecs::CRing& s, const Style& st) { painter.ring(xf, s, st); });
 
-	// Active camera ⇒ rigRender3D owns mesh present (keep 2D shape path for shapes).
-	// Session scaffolding (CTransient — toolpath previews) and scene-prop models
-	// stay in ECS for panel FBO present only — never stroke them through the 2D
-	// IRenderer. Name matching alone is not enough: duplicate names lose the
-	// name-map slot, which left giant preview meshes in the 2D path.
+	// Active camera ⇒ rigRender3D owns mesh present (2D shapes still draw here).
+	// CTransient is session scaffolding — skip it. Empty indices is sequential
+	// (CMesh), not missing data.
 	if (!hasActiveCamera(ecs)) {
 		auto meshes = ecs.view<ecs::CTransform, ecs::CMesh, ecs::CDrawStyle>();
 		for (auto entity : meshes) {
 			if (ecs.registry().all_of<ecs::CTransient>(entity) || hiddenByLayer(ecs, entity)) {
 				continue;
 			}
-			const std::string name = ecs.entityName(entity);
-			if (name.rfind("scene-prop:", 0) == 0) {
-				continue;
-			}
-			painter.mesh(meshes.get<ecs::CTransform>(entity), meshes.get<ecs::CMesh>(entity),
-						 meshes.get<ecs::CDrawStyle>(entity));
+			const auto& xf = meshes.get<ecs::CTransform>(entity);
+			const auto& mesh = meshes.get<ecs::CMesh>(entity);
+			const auto& style = meshes.get<ecs::CDrawStyle>(entity);
+			painter.mesh(xf, mesh, style);
 		}
 	}
 
