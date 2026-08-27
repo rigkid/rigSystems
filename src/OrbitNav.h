@@ -3,7 +3,7 @@
 /**
  * @file
  * @brief Orbit camera navigation: tumble, pan, dolly, pivot picking, and framing.
- * @details Nothing here reads input devices — the app fills an `OrbitNavFrame` each frame and
+ * @details Nothing here reads input devices - the app fills an `OrbitNavFrame` each frame and
  * owns the `OrbitNavState` that carries a drag between frames.
  */
 
@@ -74,8 +74,8 @@ void orbitApply(rigkit::MEcs& ecs, entt::entity cam);
  * @brief World pivot under a viewport point, for `OrbitNavFrame::pivot`.
  * @details Casts the pixel ray from `cam` (`ndcX` / `ndcY` in -1..1, +Y up;
  * works for perspective and ortho). Returns the ground-plane hit (Y = 0) when
- * the ray lands there in front of the camera at sane range — a grazing ray
- * would put the pivot near the horizon — otherwise falls back to the view
+ * the ray lands there in front of the camera at sane range - a grazing ray
+ * would put the pivot near the horizon - otherwise falls back to the view
  * plane through `COrbitDrive::target`.
  */
 glm::vec3 orbitPickPivot(rigkit::MEcs& ecs, entt::entity cam, float ndcX, float ndcY, float aspect);

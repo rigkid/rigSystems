@@ -18,7 +18,7 @@ std::unordered_set<entt::entity> g_stack;
 
 /**
  * @brief State of one SHierarchy walk: the world plus what it has visited.
- * @details Lives for a single pass. Visit sets are file-static capacity reuse —
+ * @details Lives for a single pass. Visit sets are file-static capacity reuse  - 
  * not a retained ECS owner.
  */
 struct WorldPass {

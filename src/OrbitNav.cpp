@@ -70,7 +70,7 @@ void orbitNavigate(rigkit::MEcs& ecs, entt::entity cam, const OrbitNavFrame& fra
 		return;
 	}
 	auto& orbit = ecs.getComponent<rigkit::ecs::COrbitDrive>(cam);
-	// Wheel is not a drag — apply even when gizmo/UI blocked the buttons.
+	// Wheel is not a drag - apply even when gizmo/UI blocked the buttons.
 	if (std::fabs(frame.wheel) > 1e-4f) {
 		orbit.enabled = false;
 		const float factor = frame.wheel > 0.f ? 0.9f : 1.1f;
@@ -110,7 +110,7 @@ void orbitNavigate(rigkit::MEcs& ecs, entt::entity cam, const OrbitNavFrame& fra
 				const float cy = std::cos(orbit.yaw);
 				const glm::vec3 right{cy, 0.f, -sy};
 				const glm::vec3 up{-sy * sp, cp, -cy * sp};
-				// Map pixels → world on the plane through the target so truck
+				// Map pixels to world on the plane through the target so truck
 				// speed matches what is under the cursor (and stays sane on HiDPI).
 				float worldPerPixel = orbit.radius * 0.0025f;
 				if (frame.viewH > 1.f && ecs.hasComponent<rigkit::ecs::CCamera>(cam)) {

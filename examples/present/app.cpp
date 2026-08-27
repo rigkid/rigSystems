@@ -88,7 +88,7 @@ void PresentApp::setup() {
 	circleAt(m_root, 0.f, 7.f, inkDisc(1.f), "hub");
 
 	// Four arms, each a single turning transform. What hangs below an arm is
-	// plain data — the arm is the only thing Update moves.
+	// plain data - the arm is the only thing Update moves.
 	struct ArmSpec {
 		float radius;
 		float speed;

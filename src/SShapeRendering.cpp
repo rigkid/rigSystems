@@ -111,7 +111,7 @@ struct Painter {
 		}
 	}
 
-	/** Open run of segments — no closing edge back to the first point. */
+	/** Open run of segments - no closing edge back to the first point. */
 	void polyline(const std::vector<glm::vec2>& points, const CDrawStyle& style) {
 		if (!style.hasStroke || points.size() < 2) {
 			return;
@@ -233,7 +233,7 @@ struct Painter {
 		}
 
 		// World-space verts, then one IRenderer call. OpenGL merges consecutive
-		// same-topology draws — no per-entity matrix, so the tiger stays one
+		// same-topology draws - no per-entity matrix, so the tiger stays one
 		// triangle batch and one line batch.
 		const size_t count = mesh.indices.empty() ? mesh.positions.size() : mesh.indices.size();
 		auto at = [&](size_t i) -> glm::vec2 {
@@ -361,7 +361,7 @@ void SShapeRendering(MEcs& ecs) {
 	}
 	Painter painter{*renderer};
 
-	// Refresh worlds here too — Canvas FBO present calls this during Draw
+	// Refresh worlds here too - Canvas FBO present calls this during Draw
 	// without re-entering Update.
 	SHierarchy(ecs);
 
@@ -391,8 +391,8 @@ void SShapeRendering(MEcs& ecs) {
 	presentShapes<ecs::CRing>(
 		ecs, [&](const Xf& xf, const ecs::CRing& s, const Style& st) { painter.ring(xf, s, st); });
 
-	// Active camera ⇒ rigRender3D owns mesh present (2D shapes still draw here).
-	// CTransient is session scaffolding — skip it. Empty indices is sequential
+	// Active camera  =>  rigRender3D owns mesh present (2D shapes still draw here).
+	// CTransient is session scaffolding - skip it. Empty indices is sequential
 	// (CMesh), not missing data.
 	if (!hasActiveCamera(ecs)) {
 		auto meshes = ecs.view<ecs::CTransform, ecs::CMesh, ecs::CDrawStyle>();

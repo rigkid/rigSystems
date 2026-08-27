@@ -17,7 +17,7 @@ namespace ecs {
  * @details Takes the renderer from `MEcs::getPresentRenderer()`, which the host
  * Draw pass (or a Canvas FBO pass) sets first. No-op without one. 2D meshes
  * go through `drawTriangles` / `drawLines` so the host can batch them. Skips
- * meshes when an active `CCamera` exists — `rigRender3D` presents them.
+ * meshes when an active `CCamera` exists - `rigRender3D` presents them.
  */
 void SShapeRendering(MEcs& ecs);
 

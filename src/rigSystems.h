@@ -5,7 +5,7 @@
 namespace rigkit {
 
 /**
- * @brief ECS systems pack — Update/Draw fulfillment over rigComponent data.
+ * @brief ECS systems pack - Update/Draw fulfillment over rigComponent data.
  * @details Depends on rigComponent. Registers SCanvasUpdate, SCanvasRender,
  * SShapeRendering (including selection overlay).
  */
