@@ -116,13 +116,13 @@ struct Painter {
 		if (!style.hasStroke || points.size() < 2) {
 			return;
 		}
-		std::vector<glm::vec2> pts;
-		pts.reserve((points.size() - 1) * 2);
-		for (size_t i = 0; i + 1 < points.size(); ++i) {
-			pts.push_back(points[i]);
-			pts.push_back(points[i + 1]);
+		const Paint paint = strokePaint(style);
+		out.beginPath();
+		out.moveTo(points[0].x, points[0].y);
+		for (size_t i = 1; i < points.size(); ++i) {
+			out.lineTo(points[i].x, points[i].y);
 		}
-		out.drawLines(pts, strokePaint(style));
+		out.stroke(paint.color, paint.strokeWidth);
 	}
 
 	void rectangle(const CTransform& transform, const CRectangle& shape, const CDrawStyle& style) {
