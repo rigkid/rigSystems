@@ -33,6 +33,29 @@ void clampOrbit(rigkit::ecs::COrbitDrive& orbit) {
 	orbit.height = std::sin(orbit.pitch) * orbit.radius;
 }
 
+bool cameraIsOrtho(rigkit::MEcs& ecs, entt::entity cam) {
+	return ecs.hasComponent<rigkit::ecs::CCamera>(cam) &&
+		   ecs.getComponent<rigkit::ecs::CCamera>(cam).projection ==
+			   rigkit::ecs::CCamera::Projection::Orthographic;
+}
+
+void syncOrbitClips(rigkit::MEcs& ecs, entt::entity cam, const rigkit::ecs::COrbitDrive& orbit) {
+	if (!ecs.hasComponent<rigkit::ecs::CCamera>(cam)) {
+		return;
+	}
+	auto& camPod = ecs.getComponent<rigkit::ecs::CCamera>(cam);
+	if (camPod.projection == rigkit::ecs::CCamera::Projection::Orthographic) {
+		// Radius is the standoff; zoom lives on orthoHeight (Plotter CAD rule).
+		camPod.nearClip = 0.1f;
+		const float poseDist = orbit.radius;
+		camPod.farClip =
+			std::max(1000.f, poseDist + 4.f * std::max(camPod.orthoHeight, orbit.radius));
+	} else {
+		camPod.nearClip = std::max(0.05f, orbit.radius * 0.001f);
+		camPod.farClip = std::max(2000.f, orbit.radius * 12.f);
+	}
+}
+
 bool meshWorldBounds(rigkit::MEcs& ecs, entt::entity e, glm::vec3& bmin, glm::vec3& bmax) {
 	if (!ecs.hasComponent<rigkit::ecs::CMesh>(e) || !ecs.hasComponent<rigkit::ecs::CTransform>(e)) {
 		return false;
@@ -60,6 +83,7 @@ void orbitApply(rigkit::MEcs& ecs, entt::entity cam) {
 	auto& orbit = ecs.getComponent<rigkit::ecs::COrbitDrive>(cam);
 	clampOrbit(orbit);
 	lookAt(ecs.getComponent<rigkit::ecs::CTransform>(cam), orbitEye(orbit), orbit.target);
+	syncOrbitClips(ecs, cam, orbit);
 }
 
 void orbitNavigate(rigkit::MEcs& ecs, entt::entity cam, const OrbitNavFrame& frame,
@@ -79,7 +103,12 @@ void orbitNavigate(rigkit::MEcs& ecs, entt::entity cam, const OrbitNavFrame& fra
 			// the picked point keeps its screen position.
 			orbit.target = frame.pivot + (orbit.target - frame.pivot) * factor;
 		}
-		orbit.radius *= factor;
+		if (cameraIsOrtho(ecs, cam)) {
+			auto& camPod = ecs.getComponent<rigkit::ecs::CCamera>(cam);
+			camPod.orthoHeight = std::max(0.05f, camPod.orthoHeight * factor);
+		} else {
+			orbit.radius *= factor;
+		}
 		orbitApply(ecs, cam);
 	}
 	if (frame.blocked) {
@@ -102,7 +131,13 @@ void orbitNavigate(rigkit::MEcs& ecs, entt::entity cam, const OrbitNavFrame& fra
 			state.lastX = frame.mouseX;
 			state.lastY = frame.mouseY;
 			if (frame.dolly) {
-				orbit.radius *= (dy > 0.f ? 1.01f : 0.99f);
+				const float factor = dy > 0.f ? 1.01f : 0.99f;
+				if (cameraIsOrtho(ecs, cam)) {
+					auto& camPod = ecs.getComponent<rigkit::ecs::CCamera>(cam);
+					camPod.orthoHeight = std::max(0.05f, camPod.orthoHeight * factor);
+				} else {
+					orbit.radius *= factor;
+				}
 			} else if (frame.pan) {
 				const float cp = std::cos(orbit.pitch);
 				const float sp = std::sin(orbit.pitch);

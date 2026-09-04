@@ -27,10 +27,12 @@ constexpr float kOrbitPitchLimit = 1.4f;
  * @details Read GLFW / ImGui in the app, then fill this. `orbit` tumbles around
  * `COrbitDrive::target`. `pan` is truck + pedestal (slide target on the view
  * plane). With `viewH` set, pan tracks the screen so DPI and zoom stay natural;
- * otherwise it uses a radius heuristic. `dolly` is drag-zoom (radius). `wheel`
- * applies when `blocked`. `blocked` clears an in-progress drag (gizmo, UI, off-bed).
- * With `havePivot`, orbit tumbles about `pivot` (captured at press) and wheel
- * zoom anchors on it, so the content under the cursor keeps its screen position.
+ * otherwise it uses a radius heuristic. `dolly` / `wheel` zoom: perspective
+ * dollies `radius`; orthographic scales `CCamera::orthoHeight` and leaves
+ * `radius` as the clip standoff. `wheel` applies when `blocked`. `blocked`
+ * clears an in-progress drag (gizmo, UI, off-bed). With `havePivot`, orbit
+ * tumbles about `pivot` (captured at press) and wheel zoom anchors on it, so
+ * the content under the cursor keeps its screen position.
  */
 struct OrbitNavFrame {
 	float mouseX = 0.f;
@@ -61,13 +63,18 @@ struct OrbitNavState {
 
 /**
  * @brief Apply orbit / pan / dolly to `cam`'s `COrbitDrive`.
- * @details Turns auto-orbit off while dragging or wheeling. No-op without
- * `COrbitDrive` + `CTransform`. Does not read GLFW.
+ * @details Turns auto-orbit off while dragging or wheeling. Ortho zoom is
+ * `orthoHeight`, not a walk into the scene. No-op without `COrbitDrive` +
+ * `CTransform`. Does not read GLFW.
  */
 void orbitNavigate(rigkit::MEcs& ecs, entt::entity cam, const OrbitNavFrame& frame,
 				   OrbitNavState& state);
 
-/** @brief Pose `CTransform` from `COrbitDrive` (clamps pitch / radius). */
+/**
+ * @brief Pose `CTransform` from `COrbitDrive` (clamps pitch / radius).
+ * @details Writes near / far from the standoff so ortho zoom cannot hide the
+ * scene behind the clip planes.
+ */
 void orbitApply(rigkit::MEcs& ecs, entt::entity cam);
 
 /**
