@@ -8,6 +8,7 @@
 #include "CLayer.h"
 #include "CLine.h"
 #include "CMesh.h"
+#include "CPath.h"
 #include "CPolygon.h"
 #include "CRectangle.h"
 #include "CRegularPolygon.h"
@@ -18,9 +19,12 @@
 #include "CStar.h"
 #include "CTransform.h"
 #include "CTransient.h"
+#include "PathEllipticArc.h"
 #include "PrimitiveBounds.h"
 #include "PrimitiveVertices.h"
 #include "SHierarchy.h"
+
+#include <glm/gtc/constants.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -41,9 +45,26 @@ Paint strokePaint(const CDrawStyle& style) {
 
 /** Map local shape/mesh offset through CTransform::world (from SHierarchy). */
 glm::vec2 toWorld(const CTransform& transform, float localX, float localY) {
-	const glm::vec2 t = transform.worldTranslation2D();
-	const glm::vec2 s = transform.worldScale2D();
-	return {t.x + localX * s.x, t.y + localY * s.y};
+	// Full matrix - rotation and shear included (not just translate + scale).
+	const glm::vec4 p = transform.world * glm::vec4(localX, localY, 0.f, 1.f);
+	return {p.x, p.y};
+}
+
+/** World keeps x/y axes screen-aligned (no rotation / shear) - fast paths OK. */
+bool axisAligned(const CTransform& transform) {
+	return std::fabs(transform.world[0][1]) < 1e-6f && std::fabs(transform.world[1][0]) < 1e-6f;
+}
+
+/** Sample a cubic Bezier from @p p0 into @p out (excludes p0, includes p3). */
+void sampleCubic(const glm::vec2& p0, const glm::vec2& c1, const glm::vec2& c2,
+				 const glm::vec2& p3, std::vector<glm::vec2>& out) {
+	constexpr int kSegments = 16;
+	for (int i = 1; i <= kSegments; ++i) {
+		const float t = static_cast<float>(i) / kSegments;
+		const float u = 1.f - t;
+		out.push_back(u * u * u * p0 + 3.f * u * u * t * c1 + 3.f * u * t * t * c2 +
+					  t * t * t * p3);
+	}
 }
 
 /** Map a whole local point list through CTransform::world. */
@@ -126,6 +147,16 @@ struct Painter {
 	}
 
 	void rectangle(const CTransform& transform, const CRectangle& shape, const CDrawStyle& style) {
+		if (!axisAligned(transform)) {
+			// Rotated / sheared: the axis-aligned primitive can't say it - map
+			// the corners and draw the exact quad.
+			outline({toWorld(transform, shape.x, shape.y),
+					 toWorld(transform, shape.x + shape.width, shape.y),
+					 toWorld(transform, shape.x + shape.width, shape.y + shape.height),
+					 toWorld(transform, shape.x, shape.y + shape.height)},
+					style);
+			return;
+		}
 		const glm::vec2 scale = transform.worldScale2D();
 		const glm::vec2 origin = toWorld(transform, shape.x, shape.y);
 		const float width = shape.width * scale.x;
@@ -141,6 +172,19 @@ struct Painter {
 	}
 
 	void ellipse(const CTransform& transform, const CEllipse& shape, const CDrawStyle& style) {
+		if (!axisAligned(transform)) {
+			// An affine-mapped ellipse is still an ellipse; sample and map it.
+			constexpr int kSegments = 64;
+			std::vector<glm::vec2> pts;
+			pts.reserve(kSegments);
+			for (int i = 0; i < kSegments; ++i) {
+				const float a = glm::two_pi<float>() * static_cast<float>(i) / kSegments;
+				pts.push_back(toWorld(transform, shape.cx + shape.rx * std::cos(a),
+									  shape.cy + shape.ry * std::sin(a)));
+			}
+			outline(pts, style);
+			return;
+		}
 		const glm::vec2 scale = transform.worldScale2D();
 		const glm::vec2 center = toWorld(transform, shape.cx, shape.cy);
 		const float width = shape.rx * 2.0f * scale.x;
@@ -151,6 +195,66 @@ struct Painter {
 		if (style.hasStroke) {
 			out.drawEllipse(center.x, center.y, width, height, strokePaint(style));
 		}
+	}
+
+	/** Flatten CPath commands (render-only; the document keeps true curves). */
+	void path(const CTransform& transform, const CPath& shape, const CDrawStyle& style) {
+		if (shape.commands.empty()) {
+			return;
+		}
+		std::vector<glm::vec2> cur;
+		glm::vec2 pen{0.f, 0.f};
+		glm::vec2 subStart{0.f, 0.f};
+		auto flush = [&](bool closed) {
+			if (cur.size() >= 2) {
+				const auto world = toWorldAll(transform, cur);
+				if (closed) {
+					outline(world, style);
+				} else {
+					// SVG semantics: fill treats an open subpath as closed.
+					if (style.hasFill && world.size() >= 3) {
+						out.drawPolygon(world, fillPaint(style));
+					}
+					polyline(world, style);
+				}
+			}
+			cur.clear();
+		};
+		for (const auto& cmd : shape.commands) {
+			switch (cmd.type) {
+			case CPath::Cmd::MoveTo:
+				flush(false);
+				cur.push_back(cmd.p);
+				pen = cmd.p;
+				subStart = cmd.p;
+				break;
+			case CPath::Cmd::LineTo:
+				cur.push_back(cmd.p);
+				pen = cmd.p;
+				break;
+			case CPath::Cmd::CubicTo:
+				sampleCubic(pen, cmd.c1, cmd.c2, cmd.p, cur);
+				pen = cmd.p;
+				break;
+			case CPath::Cmd::QuadTo:
+				// Quad as its equivalent cubic (exact elevation).
+				sampleCubic(pen, pen + (cmd.c1 - pen) * (2.f / 3.f),
+							cmd.p + (cmd.c1 - cmd.p) * (2.f / 3.f), cmd.p, cur);
+				pen = cmd.p;
+				break;
+			case CPath::Cmd::ArcTo: {
+				const path::EllipticArc arc = path::fromCommand(pen, cmd);
+				path::flatten(arc, 0.25f, cur);
+				pen = cmd.p;
+				break;
+			}
+			case CPath::Cmd::Close:
+				flush(true);
+				pen = subStart;
+				break;
+			}
+		}
+		flush(false);
 	}
 
 	void line(const CTransform& transform, const CLine& shape, const CDrawStyle& style) {
@@ -314,8 +418,14 @@ void selectionOverlay(MEcs& ecs, Painter& painter) {
 			continue;
 		}
 		const auto& transform = shapes.get<ecs::CTransform>(entity);
-		const glm::vec2 min = toWorld(transform, local.min.x, local.min.y);
-		const glm::vec2 max = toWorld(transform, local.max.x, local.max.y);
+		// Map all four corners - under rotation / shear min/max alone would
+		// produce a degenerate box.
+		const glm::vec2 c0 = toWorld(transform, local.min.x, local.min.y);
+		const glm::vec2 c1 = toWorld(transform, local.max.x, local.min.y);
+		const glm::vec2 c2 = toWorld(transform, local.min.x, local.max.y);
+		const glm::vec2 c3 = toWorld(transform, local.max.x, local.max.y);
+		const glm::vec2 min = glm::min(glm::min(c0, c1), glm::min(c2, c3));
+		const glm::vec2 max = glm::max(glm::max(c0, c1), glm::max(c2, c3));
 		// A line or a flat arc has no area on one axis, so an unpadded box would
 		// collapse and never draw.
 		const float pad = ((max.x - min.x) < 1.f || (max.y - min.y) < 1.f) ? 4.f : 0.f;
@@ -390,6 +500,8 @@ void SShapeRendering(MEcs& ecs) {
 	});
 	presentShapes<ecs::CRing>(
 		ecs, [&](const Xf& xf, const ecs::CRing& s, const Style& st) { painter.ring(xf, s, st); });
+	presentShapes<ecs::CPath>(
+		ecs, [&](const Xf& xf, const ecs::CPath& s, const Style& st) { painter.path(xf, s, st); });
 
 	// Active camera  =>  rigRender3D owns mesh present (2D shapes still draw here).
 	// CTransient is session scaffolding - skip it. Empty indices is sequential
