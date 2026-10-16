@@ -5,12 +5,15 @@
 #include "core/pack/PackRegistry.h"
 #include "ecs/MEcs.h"
 #include "ecs/SystemRegistry.h"
+#include "AnimSerializers.h"
+#include "ComponentSerializers.h"
 #include "SCanvas.h"
 #include "SHierarchy.h"
 #include "SModulators.h"
 #include "SOrbitDrive.h"
 #include "SShapeRendering.h"
 #include "STweens.h"
+#include "rigProject.h"
 
 #include <spdlog/spdlog.h>
 
@@ -45,6 +48,14 @@ void rigSystems::setup() {
 	});
 
 	ecs->registerSystem("SShapeRendering", SystemPhase::Draw, rigkit::ecs::SShapeRendering);
+
+	if (auto* doc = getPack<rigProject>("rigProject")) {
+		project::registerComponentSerializers(doc->serializer().registry());
+		anim::registerProjectSerializers(doc->serializer().registry());
+		spdlog::info("[rigSystems] filed floor and anim .rig codecs");
+	} else {
+		spdlog::warn("[rigSystems] rigProject not loaded - floor / anim .rig codecs skipped");
+	}
 
 	spdlog::info("[rigSystems] registered Update/Draw systems");
 }
