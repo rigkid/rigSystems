@@ -34,13 +34,19 @@ void STweens(MEcs& ecs, float dt) {
 		}
 		const float dur = std::max(1e-6f, tw.duration);
 		tw.elapsed += dt;
+		const float span = tw.pingPong ? dur * 2.f : dur;
+		float local = tw.elapsed;
 		if (tw.loop) {
-			tw.elapsed = tw.elapsed - dur * std::floor(tw.elapsed / dur);
-		} else if (tw.elapsed >= dur) {
-			tw.elapsed = dur;
+			local = tw.elapsed - span * std::floor(tw.elapsed / span);
+		} else if (tw.elapsed >= span) {
+			local = tw.pingPong ? 0.f : dur;
+			tw.elapsed = span;
 			tw.playing = false;
 		}
-		const float u = ease(tw.elapsed / dur, tw.easing);
+		if (tw.pingPong && local > dur) {
+			local = span - local;
+		}
+		const float u = ease(local / dur, tw.easing);
 		const float v = tw.from + (tw.to - tw.from) * u;
 		writeEntityProperty(ecs, tw.target, tw.propertyKey, v);
 	}
