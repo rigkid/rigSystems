@@ -25,6 +25,7 @@
 #include "CRegularPolygon.h"
 #include "CRelationship.h"
 #include "CRenderBlend.h"
+#include "CRenderEnvironment.h"
 #include "CRenderVisibility.h"
 #include "CRing.h"
 #include "CSelectable.h"
@@ -660,6 +661,43 @@ bool deserializeLightShading(entt::registry& reg, entt::entity e, const ordered_
 	auto& l = reg.get_or_emplace<ecs::CLight>(e);
 	l.dither = j.value("dither", l.dither);
 	return true;
+}
+
+bool serializeEnvironment(entt::registry& reg, entt::entity e, ordered_json& j) {
+	if (!reg.all_of<ecs::CRenderEnvironment>(e)) {
+		return false;
+	}
+	const auto& env = reg.get<ecs::CRenderEnvironment>(e);
+	if (env.hdri == entt::null) {
+		j["hdri"] = nullptr;
+	} else {
+		j["hdri"] = entityIdString(env.hdri);
+	}
+	if (env.intensity != 1.f) {
+		j["intensity"] = env.intensity;
+	}
+	return true;
+}
+
+bool deserializeEnvironment(entt::registry& reg, entt::entity e, const ordered_json& j) {
+	ecs::CRenderEnvironment env;
+	if (j.contains("hdri") && j["hdri"].is_string()) {
+		env.hdri = entityIdFromString(j["hdri"].get<std::string>());
+	}
+	env.intensity = j.value("intensity", 1.f);
+	reg.emplace_or_replace<ecs::CRenderEnvironment>(e, env);
+	return true;
+}
+
+void remapEnvironment(entt::registry& reg, const EntityIdMap& idMap) {
+	for (auto entity : reg.view<ecs::CRenderEnvironment>()) {
+		auto& env = reg.get<ecs::CRenderEnvironment>(entity);
+		if (env.hdri == entt::null) {
+			continue;
+		}
+		const auto it = idMap.find(static_cast<std::uint32_t>(env.hdri));
+		env.hdri = (it != idMap.end()) ? it->second : entt::null;
+	}
 }
 
 bool serializePalette(entt::registry& reg, entt::entity e, ordered_json& j) {
@@ -1501,6 +1539,9 @@ void registerInto(project::ComponentSerializerRegistry& registry) {
 								   serializeDrawStyle, deserializeDrawStyle);
 	addSerializer<ecs::CLight>(registry, "Light", "rig.render.light", serializeLight,
 							   deserializeLight);
+	addSerializer<ecs::CRenderEnvironment>(
+		registry, "RenderEnvironment", "rig.render.environment", serializeEnvironment,
+		deserializeEnvironment, remapEnvironment);
 	addSerializer<ecs::CDrawStyle>(registry, "StrokeStyle", "x.rigkit.stroke_style",
 								   serializeStrokeStyle, deserializeStrokeStyle);
 	addSerializer<ecs::CLight>(registry, "LightShading", "x.rigkit.light_shading",

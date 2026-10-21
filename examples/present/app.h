@@ -7,11 +7,6 @@
 
 class PresentApp : public rigkit::IApp {
   public:
-	PresentApp() {
-		window().width = 800;
-		window().height = 600;
-		window().title = "rigSystems: Present";
-	}
 	void setup() override;
 	void update(float dt) override;
 	void draw() override {}
