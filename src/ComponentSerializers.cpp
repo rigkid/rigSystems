@@ -33,6 +33,17 @@
 #include "CSpline3d.h"
 #include "CStar.h"
 #include "CText.h"
+#include "CTextPath.h"
+#include "CFontFace.h"
+#include "CInstance.h"
+#include "CPaintClip.h"
+#include "CPaintFilter.h"
+#include "CPaintFilterStep.h"
+#include "CPaintMask.h"
+#include "CPaintMarker.h"
+#include "CPaintMarkers.h"
+#include "CPaintOrder.h"
+#include "CPaintPattern.h"
 #include "CTransform.h"
 #include "CUiPanel.h"
 #include "EntityIdRemap.h"
@@ -891,37 +902,81 @@ bool deserializeDrawStyle(entt::registry& reg, entt::entity e, const ordered_jso
 	return true;
 }
 
-/// Cap, join, and dash have no Contract schema, so they ride a host extension
-/// rather than smuggling extra fields into `rig.paint.fill_stroke`.
+/// Caps / joins / dash / vector-effect. Schema is `rig.paint.stroke_style`.
 bool serializeStrokeStyle(entt::registry& reg, entt::entity e, ordered_json& j) {
 	if (!reg.all_of<ecs::CDrawStyle>(e)) {
 		return false;
 	}
 	const auto& d = reg.get<ecs::CDrawStyle>(e);
 	const ecs::CDrawStyle plain;
-	// Silence on defaults - most strokes have nothing to add here, and every
-	// omitted key is bytes off documents that hold thousands of styled entities.
 	if (d.strokeCap == plain.strokeCap && d.strokeJoin == plain.strokeJoin &&
+		d.miterLimit == plain.miterLimit && d.vectorEffect == plain.vectorEffect &&
 		d.dashPattern.empty() && d.dashOffset == plain.dashOffset) {
 		return false;
 	}
-	j["strokeCap"] = strokeCapName(d.strokeCap);
-	j["strokeJoin"] = strokeJoinName(d.strokeJoin);
+	auto cap = [](ecs::CDrawStyle::StrokeCap c) {
+		return c == ecs::CDrawStyle::StrokeCap::Square	? "square"
+			   : c == ecs::CDrawStyle::StrokeCap::Round ? "round"
+														: "butt";
+	};
+	auto join = [](ecs::CDrawStyle::StrokeJoin jn) {
+		return jn == ecs::CDrawStyle::StrokeJoin::Bevel	  ? "bevel"
+			   : jn == ecs::CDrawStyle::StrokeJoin::Round ? "round"
+														  : "miter";
+	};
+	j["cap"] = cap(d.strokeCap);
+	j["join"] = join(d.strokeJoin);
+	if (d.miterLimit != 4.f) {
+		j["miterLimit"] = d.miterLimit;
+	}
 	if (!d.dashPattern.empty()) {
-		j["dashPattern"] = d.dashPattern;
+		j["dash"] = d.dashPattern;
 		j["dashOffset"] = d.dashOffset;
+	}
+	if (d.vectorEffect == ecs::CDrawStyle::VectorEffect::NonScalingStroke) {
+		j["vectorEffect"] = "non-scaling-stroke";
 	}
 	return true;
 }
 
+bool serializeStrokeStyleLegacy(entt::registry&, entt::entity, ordered_json&) {
+	return false;
+}
+
 bool deserializeStrokeStyle(entt::registry& reg, entt::entity e, const ordered_json& j) {
 	auto& d = reg.get_or_emplace<ecs::CDrawStyle>(e);
-	d.strokeCap = strokeCapFromName(j.value("strokeCap", std::string("Butt")));
-	d.strokeJoin = strokeJoinFromName(j.value("strokeJoin", std::string("Miter")));
-	if (j.contains("dashPattern") && j["dashPattern"].is_array()) {
+	std::string cap = j.value("cap", std::string());
+	if (cap.empty()) {
+		cap = j.value("strokeCap", std::string("butt"));
+	}
+	if (cap == "Square" || cap == "square") {
+		d.strokeCap = ecs::CDrawStyle::StrokeCap::Square;
+	} else if (cap == "Round" || cap == "round") {
+		d.strokeCap = ecs::CDrawStyle::StrokeCap::Round;
+	} else {
+		d.strokeCap = ecs::CDrawStyle::StrokeCap::Butt;
+	}
+	std::string join = j.value("join", std::string());
+	if (join.empty()) {
+		join = j.value("strokeJoin", std::string("miter"));
+	}
+	if (join == "Bevel" || join == "bevel") {
+		d.strokeJoin = ecs::CDrawStyle::StrokeJoin::Bevel;
+	} else if (join == "Round" || join == "round") {
+		d.strokeJoin = ecs::CDrawStyle::StrokeJoin::Round;
+	} else {
+		d.strokeJoin = ecs::CDrawStyle::StrokeJoin::Miter;
+	}
+	d.miterLimit = j.value("miterLimit", d.miterLimit);
+	if (j.contains("dash") && j["dash"].is_array()) {
+		d.dashPattern = j["dash"].get<std::vector<float>>();
+	} else if (j.contains("dashPattern") && j["dashPattern"].is_array()) {
 		d.dashPattern = j["dashPattern"].get<std::vector<float>>();
 	}
 	d.dashOffset = j.value("dashOffset", d.dashOffset);
+	d.vectorEffect = j.value("vectorEffect", std::string("none")) == "non-scaling-stroke"
+						 ? ecs::CDrawStyle::VectorEffect::NonScalingStroke
+						 : ecs::CDrawStyle::VectorEffect::None;
 	return true;
 }
 
@@ -997,7 +1052,7 @@ const char* pathCmdType(ecs::CPath::Cmd t) {
 	case ecs::CPath::Cmd::Close:
 		return "close";
 	case ecs::CPath::Cmd::ArcTo:
-		return "cubic-to";
+		return "arc-to";
 	}
 	return "move-to";
 }
@@ -1008,7 +1063,6 @@ bool serializePath(entt::registry& reg, entt::entity e, ordered_json& j) {
 	}
 	const auto& path = reg.get<ecs::CPath>(e);
 	auto commands = ordered_json::array();
-	glm::vec2 cur{0.f, 0.f};
 	auto emit = [&](const ecs::CPath::Command& cmd) {
 		ordered_json row;
 		row["type"] = pathCmdType(cmd.type);
@@ -1027,27 +1081,29 @@ bool serializePath(entt::registry& reg, entt::entity e, ordered_json& j) {
 			row["control1"] = vec2ToJson(cmd.c1);
 			break;
 		case ecs::CPath::Cmd::Close:
+			break;
 		case ecs::CPath::Cmd::ArcTo:
+			row["point"] = vec2ToJson(cmd.p);
+			row["radiusX"] = cmd.radii.x;
+			row["radiusY"] = cmd.radii.y;
+			row["xAxisRotationDegrees"] = cmd.xRotDeg;
+			if (cmd.largeArc) {
+				row["largeArc"] = true;
+			}
+			if (cmd.sweep) {
+				row["sweep"] = true;
+			}
 			break;
 		}
 		commands.push_back(std::move(row));
 	};
 	for (const auto& cmd : path.commands) {
-		if (cmd.type == ecs::CPath::Cmd::ArcTo) {
-			ecs::CPath cubics;
-			path::appendCubics(path::fromCommand(cur, cmd), cubics);
-			for (const auto& cubic : cubics.commands) {
-				emit(cubic);
-			}
-			cur = cmd.p;
-			continue;
-		}
 		emit(cmd);
-		if (cmd.type != ecs::CPath::Cmd::Close) {
-			cur = cmd.p;
-		}
 	}
 	j["commands"] = std::move(commands);
+	if (path.evenOdd) {
+		j["fillRule"] = "evenodd";
+	}
 	return true;
 }
 
@@ -1071,6 +1127,14 @@ bool deserializePath(entt::registry& reg, entt::entity e, const ordered_json& j)
 				row.c1 = pathPointFrom(cmd, "control1");
 			} else if (type == "close") {
 				row.type = ecs::CPath::Cmd::Close;
+			} else if (type == "arc-to") {
+				row.type = ecs::CPath::Cmd::ArcTo;
+				row.p = pathPointFrom(cmd, "point");
+				row.radii.x = cmd.value("radiusX", 0.f);
+				row.radii.y = cmd.value("radiusY", 0.f);
+				row.xRotDeg = cmd.value("xAxisRotationDegrees", 0.f);
+				row.largeArc = cmd.value("largeArc", false);
+				row.sweep = cmd.value("sweep", false);
 			} else {
 				row.type = ecs::CPath::Cmd::MoveTo;
 				row.p = pathPointFrom(cmd, "point");
@@ -1078,6 +1142,7 @@ bool deserializePath(entt::registry& reg, entt::entity e, const ordered_json& j)
 			path.commands.push_back(row);
 		}
 	}
+	path.evenOdd = j.value("fillRule", std::string("nonzero")) == "evenodd";
 	reg.emplace_or_replace<ecs::CPath>(e, std::move(path));
 	return true;
 }
@@ -1423,6 +1488,63 @@ bool serializeText(entt::registry& reg, entt::entity e, ordered_json& j) {
 	if (t.tracking != 0.f) {
 		j["tracking"] = t.tracking;
 	}
+	if (t.anchor != ecs::CText::Anchor::Start) {
+		j["anchor"] = t.anchor == ecs::CText::Anchor::Middle ? "middle" : "end";
+	}
+	if (t.writingMode != ecs::CText::WritingMode::HorizontalTb) {
+		j["writingMode"] = t.writingMode == ecs::CText::WritingMode::VerticalRl ? "vertical-rl"
+																			   : "vertical-lr";
+	}
+	if (t.direction == ecs::CText::Direction::Rtl) {
+		j["direction"] = "rtl";
+	}
+	if (t.baseline != ecs::CText::Baseline::Auto) {
+		const char* b = "auto";
+		switch (t.baseline) {
+		case ecs::CText::Baseline::Alphabetic:
+			b = "alphabetic";
+			break;
+		case ecs::CText::Baseline::Middle:
+			b = "middle";
+			break;
+		case ecs::CText::Baseline::Hanging:
+			b = "hanging";
+			break;
+		case ecs::CText::Baseline::Ideographic:
+			b = "ideographic";
+			break;
+		case ecs::CText::Baseline::Central:
+			b = "central";
+			break;
+		default:
+			break;
+		}
+		j["baseline"] = b;
+	}
+	if (!t.placements.empty()) {
+		auto rows = ordered_json::array();
+		for (const auto& p : t.placements) {
+			ordered_json row;
+			row["index"] = p.index;
+			if (p.hasX) {
+				row["x"] = p.x;
+			}
+			if (p.hasY) {
+				row["y"] = p.y;
+			}
+			if (p.dx != 0.f) {
+				row["dx"] = p.dx;
+			}
+			if (p.dy != 0.f) {
+				row["dy"] = p.dy;
+			}
+			if (p.rotateDegrees != 0.f) {
+				row["rotateDegrees"] = p.rotateDegrees;
+			}
+			rows.push_back(std::move(row));
+		}
+		j["placements"] = std::move(rows);
+	}
 	return true;
 }
 
@@ -1446,19 +1568,590 @@ bool deserializeText(entt::registry& reg, entt::entity e, const ordered_json& j)
 	t.features = j.value("features", t.features);
 	t.useKerning = j.value("useKerning", t.useKerning);
 	t.tracking = j.value("tracking", t.tracking);
+	{
+		const std::string a = j.value("anchor", std::string("start"));
+		t.anchor = a == "middle"   ? ecs::CText::Anchor::Middle
+				   : a == "end"	   ? ecs::CText::Anchor::End
+								   : ecs::CText::Anchor::Start;
+		const std::string wm = j.value("writingMode", std::string("horizontal-tb"));
+		t.writingMode = wm == "vertical-rl"	  ? ecs::CText::WritingMode::VerticalRl
+						: wm == "vertical-lr" ? ecs::CText::WritingMode::VerticalLr
+											  : ecs::CText::WritingMode::HorizontalTb;
+		t.direction = j.value("direction", std::string("ltr")) == "rtl"
+						  ? ecs::CText::Direction::Rtl
+						  : ecs::CText::Direction::Ltr;
+		const std::string b = j.value("baseline", std::string("auto"));
+		t.baseline = b == "alphabetic"	   ? ecs::CText::Baseline::Alphabetic
+					 : b == "middle"	   ? ecs::CText::Baseline::Middle
+					 : b == "hanging"	   ? ecs::CText::Baseline::Hanging
+					 : b == "ideographic"  ? ecs::CText::Baseline::Ideographic
+					 : b == "central"	   ? ecs::CText::Baseline::Central
+										   : ecs::CText::Baseline::Auto;
+	}
+	if (j.contains("placements") && j["placements"].is_array()) {
+		for (const auto& row : j["placements"]) {
+			ecs::CText::Placement p;
+			p.index = row.value("index", 0);
+			if (row.contains("x")) {
+				p.hasX = true;
+				p.x = row.value("x", 0.f);
+			}
+			if (row.contains("y")) {
+				p.hasY = true;
+				p.y = row.value("y", 0.f);
+			}
+			p.dx = row.value("dx", 0.f);
+			p.dy = row.value("dy", 0.f);
+			p.rotateDegrees = row.value("rotateDegrees", 0.f);
+			t.placements.push_back(p);
+		}
+	}
 	reg.emplace_or_replace<ecs::CText>(e, std::move(t));
 	return true;
+}
+
+void remapEntityField(entt::entity& e, const EntityIdMap& idMap) {
+	if (e == entt::null) {
+		return;
+	}
+	const auto it = idMap.find(static_cast<std::uint32_t>(e));
+	e = (it != idMap.end()) ? it->second : entt::null;
 }
 
 void remapTextFont(entt::registry& reg, const EntityIdMap& idMap) {
 	for (auto entity : reg.view<ecs::CText>()) {
 		auto& t = reg.get<ecs::CText>(entity);
-		if (t.font == entt::null) {
-			continue;
-		}
-		const auto it = idMap.find(static_cast<std::uint32_t>(t.font));
-		t.font = (it != idMap.end()) ? it->second : entt::null;
+		remapEntityField(t.font, idMap);
 	}
+}
+
+void remapTextPath(entt::registry& reg, const EntityIdMap& idMap) {
+	for (auto entity : reg.view<ecs::CTextPath>()) {
+		remapEntityField(reg.get<ecs::CTextPath>(entity).path, idMap);
+	}
+}
+
+void remapFontFace(entt::registry& reg, const EntityIdMap& idMap) {
+	for (auto entity : reg.view<ecs::CFontFace>()) {
+		remapEntityField(reg.get<ecs::CFontFace>(entity).asset, idMap);
+	}
+}
+
+void remapInstance(entt::registry& reg, const EntityIdMap& idMap) {
+	for (auto entity : reg.view<ecs::CInstance>()) {
+		remapEntityField(reg.get<ecs::CInstance>(entity).source, idMap);
+	}
+}
+
+void remapPaintClip(entt::registry& reg, const EntityIdMap& idMap) {
+	for (auto entity : reg.view<ecs::CPaintClip>()) {
+		remapEntityField(reg.get<ecs::CPaintClip>(entity).path, idMap);
+	}
+}
+
+void remapPaintMask(entt::registry& reg, const EntityIdMap& idMap) {
+	for (auto entity : reg.view<ecs::CPaintMask>()) {
+		remapEntityField(reg.get<ecs::CPaintMask>(entity).source, idMap);
+	}
+}
+
+void remapPaintMarkers(entt::registry& reg, const EntityIdMap& idMap) {
+	for (auto entity : reg.view<ecs::CPaintMarkers>()) {
+		auto& m = reg.get<ecs::CPaintMarkers>(entity);
+		remapEntityField(m.start, idMap);
+		remapEntityField(m.mid, idMap);
+		remapEntityField(m.end, idMap);
+	}
+}
+
+void remapPaintFilter(entt::registry& reg, const EntityIdMap& idMap) {
+	for (auto entity : reg.view<ecs::CPaintFilter>()) {
+		remapEntityField(reg.get<ecs::CPaintFilter>(entity).filter, idMap);
+	}
+}
+
+void remapPaintFilterStep(entt::registry& reg, const EntityIdMap& idMap) {
+	for (auto entity : reg.view<ecs::CPaintFilterStep>()) {
+		remapEntityField(reg.get<ecs::CPaintFilterStep>(entity).asset, idMap);
+	}
+}
+
+bool serializeEntityRef(ordered_json& j, const char* key, entt::entity e) {
+	if (e == entt::null) {
+		return false;
+	}
+	j[key] = entityIdString(e);
+	return true;
+}
+
+entt::entity readEntityRef(const ordered_json& j, const char* key) {
+	if (!j.contains(key) || !j[key].is_string()) {
+		return entt::null;
+	}
+	return entityIdFromString(j[key].get<std::string>());
+}
+
+bool serializeTextPath(entt::registry& reg, entt::entity e, ordered_json& j) {
+	if (!reg.all_of<ecs::CTextPath>(e)) {
+		return false;
+	}
+	const auto& t = reg.get<ecs::CTextPath>(e);
+	if (t.path == entt::null) {
+		return false;
+	}
+	j["path"] = entityIdString(t.path);
+	if (t.startOffset != 0.f) {
+		j["startOffset"] = t.startOffset;
+	}
+	if (t.startOffsetMode == ecs::CTextPath::OffsetMode::Ratio) {
+		j["startOffsetMode"] = "ratio";
+	}
+	if (t.method == ecs::CTextPath::Method::Stretch) {
+		j["method"] = "stretch";
+	}
+	if (t.spacing == ecs::CTextPath::Spacing::Auto) {
+		j["spacing"] = "auto";
+	}
+	if (t.side == ecs::CTextPath::Side::Right) {
+		j["side"] = "right";
+	}
+	return true;
+}
+
+bool deserializeTextPath(entt::registry& reg, entt::entity e, const ordered_json& j) {
+	ecs::CTextPath t;
+	t.path = readEntityRef(j, "path");
+	t.startOffset = j.value("startOffset", 0.f);
+	t.startOffsetMode = j.value("startOffsetMode", std::string("length")) == "ratio"
+							? ecs::CTextPath::OffsetMode::Ratio
+							: ecs::CTextPath::OffsetMode::Length;
+	t.method = j.value("method", std::string("align")) == "stretch"
+				   ? ecs::CTextPath::Method::Stretch
+				   : ecs::CTextPath::Method::Align;
+	t.spacing = j.value("spacing", std::string("exact")) == "auto"
+					? ecs::CTextPath::Spacing::Auto
+					: ecs::CTextPath::Spacing::Exact;
+	t.side = j.value("side", std::string("left")) == "right" ? ecs::CTextPath::Side::Right
+															: ecs::CTextPath::Side::Left;
+	reg.emplace_or_replace<ecs::CTextPath>(e, t);
+	return true;
+}
+
+bool serializeFontFace(entt::registry& reg, entt::entity e, ordered_json& j) {
+	if (!reg.all_of<ecs::CFontFace>(e)) {
+		return false;
+	}
+	const auto& f = reg.get<ecs::CFontFace>(e);
+	j["family"] = f.family;
+	if (f.asset != entt::null) {
+		j["asset"] = entityIdString(f.asset);
+	}
+	if (f.weight != 400.f) {
+		j["weight"] = f.weight;
+	}
+	if (f.style == ecs::CFontFace::Style::Italic) {
+		j["style"] = "italic";
+	}
+	return true;
+}
+
+bool deserializeFontFace(entt::registry& reg, entt::entity e, const ordered_json& j) {
+	ecs::CFontFace f;
+	f.family = j.value("family", f.family);
+	f.asset = readEntityRef(j, "asset");
+	f.weight = j.value("weight", f.weight);
+	f.style = j.value("style", std::string("normal")) == "italic" ? ecs::CFontFace::Style::Italic
+																  : ecs::CFontFace::Style::Normal;
+	reg.emplace_or_replace<ecs::CFontFace>(e, std::move(f));
+	return true;
+}
+
+bool serializeInstance(entt::registry& reg, entt::entity e, ordered_json& j) {
+	if (!reg.all_of<ecs::CInstance>(e)) {
+		return false;
+	}
+	const auto src = reg.get<ecs::CInstance>(e).source;
+	if (src == entt::null) {
+		return false;
+	}
+	j["source"] = entityIdString(src);
+	return true;
+}
+
+bool deserializeInstance(entt::registry& reg, entt::entity e, const ordered_json& j) {
+	ecs::CInstance i;
+	i.source = readEntityRef(j, "source");
+	reg.emplace_or_replace<ecs::CInstance>(e, i);
+	return true;
+}
+
+bool serializePaintClip(entt::registry& reg, entt::entity e, ordered_json& j) {
+	if (!reg.all_of<ecs::CPaintClip>(e)) {
+		return false;
+	}
+	return serializeEntityRef(j, "path", reg.get<ecs::CPaintClip>(e).path);
+}
+
+bool deserializePaintClip(entt::registry& reg, entt::entity e, const ordered_json& j) {
+	ecs::CPaintClip c;
+	c.path = readEntityRef(j, "path");
+	reg.emplace_or_replace<ecs::CPaintClip>(e, c);
+	return true;
+}
+
+bool serializePaintMask(entt::registry& reg, entt::entity e, ordered_json& j) {
+	if (!reg.all_of<ecs::CPaintMask>(e)) {
+		return false;
+	}
+	const auto& m = reg.get<ecs::CPaintMask>(e);
+	if (m.source == entt::null) {
+		return false;
+	}
+	j["source"] = entityIdString(m.source);
+	if (m.channel == ecs::CPaintMask::Channel::Alpha) {
+		j["channel"] = "alpha";
+	}
+	return true;
+}
+
+bool deserializePaintMask(entt::registry& reg, entt::entity e, const ordered_json& j) {
+	ecs::CPaintMask m;
+	m.source = readEntityRef(j, "source");
+	m.channel = j.value("channel", std::string("luminance")) == "alpha"
+					? ecs::CPaintMask::Channel::Alpha
+					: ecs::CPaintMask::Channel::Luminance;
+	reg.emplace_or_replace<ecs::CPaintMask>(e, m);
+	return true;
+}
+
+bool serializePaintMarkers(entt::registry& reg, entt::entity e, ordered_json& j) {
+	if (!reg.all_of<ecs::CPaintMarkers>(e)) {
+		return false;
+	}
+	const auto& m = reg.get<ecs::CPaintMarkers>(e);
+	bool any = false;
+	any = serializeEntityRef(j, "start", m.start) || any;
+	any = serializeEntityRef(j, "mid", m.mid) || any;
+	any = serializeEntityRef(j, "end", m.end) || any;
+	return any;
+}
+
+bool deserializePaintMarkers(entt::registry& reg, entt::entity e, const ordered_json& j) {
+	ecs::CPaintMarkers m;
+	m.start = readEntityRef(j, "start");
+	m.mid = readEntityRef(j, "mid");
+	m.end = readEntityRef(j, "end");
+	reg.emplace_or_replace<ecs::CPaintMarkers>(e, m);
+	return true;
+}
+
+bool serializePaintMarker(entt::registry& reg, entt::entity e, ordered_json& j) {
+	if (!reg.all_of<ecs::CPaintMarker>(e)) {
+		return false;
+	}
+	const auto& m = reg.get<ecs::CPaintMarker>(e);
+	j["width"] = m.width;
+	j["height"] = m.height;
+	if (m.ref.x != 0.f || m.ref.y != 0.f) {
+		j["ref"] = vec2ToJson(m.ref);
+	}
+	if (m.orient == ecs::CPaintMarker::Orient::AutoStartReverse) {
+		j["orient"] = "auto-start-reverse";
+	} else if (m.orient == ecs::CPaintMarker::Orient::Angle) {
+		j["orient"] = "angle";
+		j["orientDegrees"] = m.orientDegrees;
+	}
+	if (m.units == ecs::CPaintMarker::Units::UserSpace) {
+		j["units"] = "user-space";
+	}
+	return true;
+}
+
+bool deserializePaintMarker(entt::registry& reg, entt::entity e, const ordered_json& j) {
+	ecs::CPaintMarker m;
+	m.width = j.value("width", m.width);
+	m.height = j.value("height", m.height);
+	if (j.contains("ref")) {
+		m.ref = vec2FromJson(j["ref"], m.ref);
+	}
+	const std::string o = j.value("orient", std::string("auto"));
+	m.orient = o == "auto-start-reverse" ? ecs::CPaintMarker::Orient::AutoStartReverse
+			   : o == "angle"			 ? ecs::CPaintMarker::Orient::Angle
+										 : ecs::CPaintMarker::Orient::Auto;
+	m.orientDegrees = j.value("orientDegrees", m.orientDegrees);
+	m.units = j.value("units", std::string("stroke-width")) == "user-space"
+				  ? ecs::CPaintMarker::Units::UserSpace
+				  : ecs::CPaintMarker::Units::StrokeWidth;
+	reg.emplace_or_replace<ecs::CPaintMarker>(e, m);
+	return true;
+}
+
+bool serializePaintPattern(entt::registry& reg, entt::entity e, ordered_json& j) {
+	if (!reg.all_of<ecs::CPaintPattern>(e)) {
+		return false;
+	}
+	const auto& p = reg.get<ecs::CPaintPattern>(e);
+	j["width"] = p.width;
+	j["height"] = p.height;
+	if (p.units == ecs::CPaintPattern::Units::UserSpace) {
+		j["units"] = "user-space";
+	}
+	if (p.contentUnits == ecs::CPaintPattern::Units::Object) {
+		j["contentUnits"] = "object";
+	}
+	return true;
+}
+
+bool deserializePaintPattern(entt::registry& reg, entt::entity e, const ordered_json& j) {
+	ecs::CPaintPattern p;
+	p.width = j.value("width", p.width);
+	p.height = j.value("height", p.height);
+	p.units = j.value("units", std::string("object")) == "user-space"
+				  ? ecs::CPaintPattern::Units::UserSpace
+				  : ecs::CPaintPattern::Units::Object;
+	p.contentUnits = j.value("contentUnits", std::string("user-space")) == "object"
+						 ? ecs::CPaintPattern::Units::Object
+						 : ecs::CPaintPattern::Units::UserSpace;
+	reg.emplace_or_replace<ecs::CPaintPattern>(e, p);
+	return true;
+}
+
+bool serializePaintOrder(entt::registry& reg, entt::entity e, ordered_json& j) {
+	if (!reg.all_of<ecs::CPaintOrder>(e)) {
+		return false;
+	}
+	const auto& o = reg.get<ecs::CPaintOrder>(e);
+	if (o.layers.empty()) {
+		return false;
+	}
+	auto layers = ordered_json::array();
+	for (auto layer : o.layers) {
+		layers.push_back(layer == ecs::CPaintOrder::Layer::Stroke	 ? "stroke"
+						 : layer == ecs::CPaintOrder::Layer::Markers ? "markers"
+																	 : "fill");
+	}
+	j["layers"] = std::move(layers);
+	return true;
+}
+
+bool deserializePaintOrder(entt::registry& reg, entt::entity e, const ordered_json& j) {
+	ecs::CPaintOrder o;
+	if (j.contains("layers") && j["layers"].is_array()) {
+		for (const auto& layer : j["layers"]) {
+			const std::string s = layer.get<std::string>();
+			o.layers.push_back(s == "stroke"	? ecs::CPaintOrder::Layer::Stroke
+							   : s == "markers" ? ecs::CPaintOrder::Layer::Markers
+												: ecs::CPaintOrder::Layer::Fill);
+		}
+	}
+	reg.emplace_or_replace<ecs::CPaintOrder>(e, std::move(o));
+	return true;
+}
+
+bool serializePaintFilter(entt::registry& reg, entt::entity e, ordered_json& j) {
+	if (!reg.all_of<ecs::CPaintFilter>(e)) {
+		return false;
+	}
+	const auto& f = reg.get<ecs::CPaintFilter>(e);
+	bool any = serializeEntityRef(j, "filter", f.filter);
+	if (f.primitiveUnits == ecs::CPaintFilter::Units::Object) {
+		j["primitiveUnits"] = "object";
+		any = true;
+	}
+	return any;
+}
+
+bool deserializePaintFilter(entt::registry& reg, entt::entity e, const ordered_json& j) {
+	ecs::CPaintFilter f;
+	f.filter = readEntityRef(j, "filter");
+	f.primitiveUnits = j.value("primitiveUnits", std::string("user-space")) == "object"
+						   ? ecs::CPaintFilter::Units::Object
+						   : ecs::CPaintFilter::Units::UserSpace;
+	reg.emplace_or_replace<ecs::CPaintFilter>(e, f);
+	return true;
+}
+
+const char* filterKindName(ecs::CPaintFilterStep::Kind k) {
+	switch (k) {
+	case ecs::CPaintFilterStep::Kind::Blend:
+		return "blend";
+	case ecs::CPaintFilterStep::Kind::ColorMatrix:
+		return "color-matrix";
+	case ecs::CPaintFilterStep::Kind::ComponentTransfer:
+		return "component-transfer";
+	case ecs::CPaintFilterStep::Kind::Composite:
+		return "composite";
+	case ecs::CPaintFilterStep::Kind::Convolve:
+		return "convolve";
+	case ecs::CPaintFilterStep::Kind::DiffuseLight:
+		return "diffuse-light";
+	case ecs::CPaintFilterStep::Kind::Displacement:
+		return "displacement";
+	case ecs::CPaintFilterStep::Kind::DropShadow:
+		return "drop-shadow";
+	case ecs::CPaintFilterStep::Kind::Flood:
+		return "flood";
+	case ecs::CPaintFilterStep::Kind::Blur:
+		return "blur";
+	case ecs::CPaintFilterStep::Kind::Image:
+		return "image";
+	case ecs::CPaintFilterStep::Kind::Merge:
+		return "merge";
+	case ecs::CPaintFilterStep::Kind::Morphology:
+		return "morphology";
+	case ecs::CPaintFilterStep::Kind::Offset:
+		return "offset";
+	case ecs::CPaintFilterStep::Kind::SpecularLight:
+		return "specular-light";
+	case ecs::CPaintFilterStep::Kind::Tile:
+		return "tile";
+	case ecs::CPaintFilterStep::Kind::Turbulence:
+		return "turbulence";
+	}
+	return "blur";
+}
+
+ecs::CPaintFilterStep::Kind filterKindFromName(const std::string& s) {
+	if (s == "blend") {
+		return ecs::CPaintFilterStep::Kind::Blend;
+	}
+	if (s == "color-matrix") {
+		return ecs::CPaintFilterStep::Kind::ColorMatrix;
+	}
+	if (s == "component-transfer") {
+		return ecs::CPaintFilterStep::Kind::ComponentTransfer;
+	}
+	if (s == "composite") {
+		return ecs::CPaintFilterStep::Kind::Composite;
+	}
+	if (s == "convolve") {
+		return ecs::CPaintFilterStep::Kind::Convolve;
+	}
+	if (s == "diffuse-light") {
+		return ecs::CPaintFilterStep::Kind::DiffuseLight;
+	}
+	if (s == "displacement") {
+		return ecs::CPaintFilterStep::Kind::Displacement;
+	}
+	if (s == "drop-shadow") {
+		return ecs::CPaintFilterStep::Kind::DropShadow;
+	}
+	if (s == "flood") {
+		return ecs::CPaintFilterStep::Kind::Flood;
+	}
+	if (s == "image") {
+		return ecs::CPaintFilterStep::Kind::Image;
+	}
+	if (s == "merge") {
+		return ecs::CPaintFilterStep::Kind::Merge;
+	}
+	if (s == "morphology") {
+		return ecs::CPaintFilterStep::Kind::Morphology;
+	}
+	if (s == "offset") {
+		return ecs::CPaintFilterStep::Kind::Offset;
+	}
+	if (s == "specular-light") {
+		return ecs::CPaintFilterStep::Kind::SpecularLight;
+	}
+	if (s == "tile") {
+		return ecs::CPaintFilterStep::Kind::Tile;
+	}
+	if (s == "turbulence") {
+		return ecs::CPaintFilterStep::Kind::Turbulence;
+	}
+	return ecs::CPaintFilterStep::Kind::Blur;
+}
+
+bool serializePaintFilterStep(entt::registry& reg, entt::entity e, ordered_json& j) {
+	if (!reg.all_of<ecs::CPaintFilterStep>(e)) {
+		return false;
+	}
+	const auto& s = reg.get<ecs::CPaintFilterStep>(e);
+	j["kind"] = filterKindName(s.kind);
+	if (!s.in.empty()) {
+		j["in"] = s.in;
+	}
+	if (!s.in2.empty()) {
+		j["in2"] = s.in2;
+	}
+	if (s.stdDeviation != 0.f) {
+		j["stdDeviation"] = s.stdDeviation;
+	}
+	if (s.offset.x != 0.f || s.offset.y != 0.f) {
+		j["offset"] = vec2ToJson(s.offset);
+	}
+	if (!s.values.empty()) {
+		j["values"] = s.values;
+	}
+	if (s.kind == ecs::CPaintFilterStep::Kind::Composite ||
+		s.kind == ecs::CPaintFilterStep::Kind::Morphology) {
+		const char* op = "over";
+		switch (s.op) {
+		case ecs::CPaintFilterStep::Operator::In:
+			op = "in";
+			break;
+		case ecs::CPaintFilterStep::Operator::Out:
+			op = "out";
+			break;
+		case ecs::CPaintFilterStep::Operator::Atop:
+			op = "atop";
+			break;
+		case ecs::CPaintFilterStep::Operator::Xor:
+			op = "xor";
+			break;
+		case ecs::CPaintFilterStep::Operator::Arithmetic:
+			op = "arithmetic";
+			break;
+		case ecs::CPaintFilterStep::Operator::Erode:
+			op = "erode";
+			break;
+		case ecs::CPaintFilterStep::Operator::Dilate:
+			op = "dilate";
+			break;
+		default:
+			break;
+		}
+		j["operator"] = op;
+	}
+	if (s.radius != 0.f) {
+		j["radius"] = s.radius;
+	}
+	if (s.kind == ecs::CPaintFilterStep::Kind::Flood) {
+		j["rgba"] = colorToJson(s.rgba);
+	}
+	serializeEntityRef(j, "asset", s.asset);
+	return true;
+}
+
+bool deserializePaintFilterStep(entt::registry& reg, entt::entity e, const ordered_json& j) {
+	ecs::CPaintFilterStep s;
+	s.kind = filterKindFromName(j.value("kind", std::string("blur")));
+	s.in = j.value("in", s.in);
+	s.in2 = j.value("in2", s.in2);
+	s.stdDeviation = j.value("stdDeviation", s.stdDeviation);
+	if (j.contains("offset")) {
+		s.offset = vec2FromJson(j["offset"], s.offset);
+	}
+	if (j.contains("values") && j["values"].is_array()) {
+		s.values = j["values"].get<std::vector<float>>();
+	}
+	const std::string op = j.value("operator", std::string("over"));
+	s.op = op == "in"			? ecs::CPaintFilterStep::Operator::In
+		   : op == "out"		? ecs::CPaintFilterStep::Operator::Out
+		   : op == "atop"		? ecs::CPaintFilterStep::Operator::Atop
+		   : op == "xor"		? ecs::CPaintFilterStep::Operator::Xor
+		   : op == "arithmetic" ? ecs::CPaintFilterStep::Operator::Arithmetic
+		   : op == "erode"		? ecs::CPaintFilterStep::Operator::Erode
+		   : op == "dilate"		? ecs::CPaintFilterStep::Operator::Dilate
+								: ecs::CPaintFilterStep::Operator::Over;
+	s.radius = j.value("radius", s.radius);
+	if (j.contains("rgba")) {
+		s.rgba = rgbaFromJson(j["rgba"], s.rgba);
+	}
+	s.asset = readEntityRef(j, "asset");
+	reg.emplace_or_replace<ecs::CPaintFilterStep>(e, std::move(s));
+	return true;
 }
 
 bool serializeCurve(entt::registry& reg, entt::entity e, ordered_json& j) {
@@ -1542,8 +2235,10 @@ void registerInto(project::ComponentSerializerRegistry& registry) {
 	addSerializer<ecs::CRenderEnvironment>(
 		registry, "RenderEnvironment", "rig.render.environment", serializeEnvironment,
 		deserializeEnvironment, remapEnvironment);
-	addSerializer<ecs::CDrawStyle>(registry, "StrokeStyle", "x.rigkit.stroke_style",
+	addSerializer<ecs::CDrawStyle>(registry, "StrokeStyle", "rig.paint.stroke_style",
 								   serializeStrokeStyle, deserializeStrokeStyle);
+	addSerializer<ecs::CDrawStyle>(registry, "StrokeStyleLegacy", "x.rigkit.stroke_style",
+								   serializeStrokeStyleLegacy, deserializeStrokeStyle);
 	addSerializer<ecs::CLight>(registry, "LightShading", "x.rigkit.light_shading",
 							   serializeLightShading, deserializeLightShading);
 
@@ -1592,6 +2287,37 @@ void registerInto(project::ComponentSerializerRegistry& registry) {
 	addSerializer<ecs::CText>(
 		registry, "Text", "rig.media.text", serializeText, deserializeText,
 		[](entt::registry& reg, const EntityIdMap& idMap) { remapTextFont(reg, idMap); });
+	addSerializer<ecs::CTextPath>(
+		registry, "TextPath", "rig.media.text_path", serializeTextPath, deserializeTextPath,
+		[](entt::registry& reg, const EntityIdMap& idMap) { remapTextPath(reg, idMap); });
+	addSerializer<ecs::CFontFace>(
+		registry, "FontFace", "rig.media.font_face", serializeFontFace, deserializeFontFace,
+		[](entt::registry& reg, const EntityIdMap& idMap) { remapFontFace(reg, idMap); });
+	addSerializer<ecs::CInstance>(
+		registry, "Instance", "rig.spatial.instance", serializeInstance, deserializeInstance,
+		[](entt::registry& reg, const EntityIdMap& idMap) { remapInstance(reg, idMap); });
+	addSerializer<ecs::CPaintClip>(
+		registry, "PaintClip", "rig.paint.clip", serializePaintClip, deserializePaintClip,
+		[](entt::registry& reg, const EntityIdMap& idMap) { remapPaintClip(reg, idMap); });
+	addSerializer<ecs::CPaintMask>(
+		registry, "PaintMask", "rig.paint.mask", serializePaintMask, deserializePaintMask,
+		[](entt::registry& reg, const EntityIdMap& idMap) { remapPaintMask(reg, idMap); });
+	addSerializer<ecs::CPaintMarkers>(
+		registry, "PaintMarkers", "rig.paint.markers", serializePaintMarkers, deserializePaintMarkers,
+		[](entt::registry& reg, const EntityIdMap& idMap) { remapPaintMarkers(reg, idMap); });
+	addSerializer<ecs::CPaintMarker>(registry, "PaintMarker", "rig.paint.marker",
+									 serializePaintMarker, deserializePaintMarker);
+	addSerializer<ecs::CPaintPattern>(registry, "PaintPattern", "rig.paint.pattern",
+									  serializePaintPattern, deserializePaintPattern);
+	addSerializer<ecs::CPaintOrder>(registry, "PaintOrder", "rig.paint.order", serializePaintOrder,
+									deserializePaintOrder);
+	addSerializer<ecs::CPaintFilter>(
+		registry, "PaintFilter", "rig.paint.filter", serializePaintFilter, deserializePaintFilter,
+		[](entt::registry& reg, const EntityIdMap& idMap) { remapPaintFilter(reg, idMap); });
+	addSerializer<ecs::CPaintFilterStep>(
+		registry, "PaintFilterStep", "rig.paint.filter_step", serializePaintFilterStep,
+		deserializePaintFilterStep,
+		[](entt::registry& reg, const EntityIdMap& idMap) { remapPaintFilterStep(reg, idMap); });
 	addSerializer<ecs::CCurve>(registry, "Curve", "rig.anim.curve", serializeCurve,
 							   deserializeCurve);
 
