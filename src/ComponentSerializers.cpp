@@ -1488,6 +1488,12 @@ bool serializeText(entt::registry& reg, entt::entity e, ordered_json& j) {
 	if (t.tracking != 0.f) {
 		j["tracking"] = t.tracking;
 	}
+	if (t.underline) {
+		j["underline"] = true;
+	}
+	if (t.strikeThrough) {
+		j["strikeThrough"] = true;
+	}
 	if (t.anchor != ecs::CText::Anchor::Start) {
 		j["anchor"] = t.anchor == ecs::CText::Anchor::Middle ? "middle" : "end";
 	}
@@ -1568,6 +1574,8 @@ bool deserializeText(entt::registry& reg, entt::entity e, const ordered_json& j)
 	t.features = j.value("features", t.features);
 	t.useKerning = j.value("useKerning", t.useKerning);
 	t.tracking = j.value("tracking", t.tracking);
+	t.underline = j.value("underline", false);
+	t.strikeThrough = j.value("strikeThrough", false);
 	{
 		const std::string a = j.value("anchor", std::string("start"));
 		t.anchor = a == "middle"   ? ecs::CText::Anchor::Middle
