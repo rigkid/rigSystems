@@ -2,7 +2,7 @@
   "name": "rigSystems",
   "url": "https://github.com/rigkid/rigSystems.git",
   "ref": "main",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "author": "Rigkid",
   "license": "MIT Rigkid Contributors",
   "description": "ECS Update/Draw systems (fulfillment). Depends on rigComponent data.",

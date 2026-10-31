@@ -1252,6 +1252,20 @@ bool deserializeRenderBlend(entt::registry& reg, entt::entity e, const ordered_j
 	return true;
 }
 
+int readUiTokenOrInt(const ordered_json& j, const char* key, int fallback,
+					 int (*fromToken)(const std::string&)) {
+	if (!j.contains(key)) {
+		return fallback;
+	}
+	if (j[key].is_string()) {
+		return fromToken(j[key].get<std::string>());
+	}
+	if (j[key].is_number_integer()) {
+		return j[key].get<int>();
+	}
+	return fallback;
+}
+
 bool serializeUiPanel(entt::registry& reg, entt::entity e, ordered_json& j) {
 	if (!reg.all_of<ecs::CUiPanel>(e)) {
 		return false;
@@ -1259,6 +1273,9 @@ bool serializeUiPanel(entt::registry& reg, entt::entity e, ordered_json& j) {
 	const auto& p = reg.get<ecs::CUiPanel>(e);
 	if (!p.role.empty()) {
 		j["role"] = p.role;
+	}
+	if (p.surface != ecs::kUiSurfaceTool) {
+		j["surface"] = ecs::uiSurfaceToken(p.surface);
 	}
 	j["order"] = p.order;
 	j["visible"] = p.visible;
@@ -1270,6 +1287,7 @@ bool serializeUiPanel(entt::registry& reg, entt::entity e, ordered_json& j) {
 bool deserializeUiPanel(entt::registry& reg, entt::entity e, const ordered_json& j) {
 	ecs::CUiPanel p;
 	p.role = j.value("role", p.role);
+	p.surface = readUiTokenOrInt(j, "surface", p.surface, ecs::uiSurfaceFromToken);
 	p.order = j.value("order", p.order);
 	p.visible = j.value("visible", p.visible);
 	p.preferredWidth = j.value("preferredWidth", p.preferredWidth);
@@ -1290,7 +1308,9 @@ bool serializeUiGroup(entt::registry& reg, entt::entity e, ordered_json& j) {
 		j["parent"] = entityIdString(static_cast<entt::entity>(g.parent));
 	}
 	j["order"] = g.order;
-	j["orientation"] = g.orientation;
+	if (g.orientation != ecs::kUiOrientVertical) {
+		j["orientation"] = ecs::uiOrientToken(g.orientation);
+	}
 	if (g.collapsed) {
 		j["collapsed"] = true;
 	}
@@ -1306,7 +1326,7 @@ bool deserializeUiGroup(entt::registry& reg, entt::entity e, const ordered_json&
 		g.parent = static_cast<uint32_t>(entityIdFromString(j["parent"].get<std::string>()));
 	}
 	g.order = j.value("order", g.order);
-	g.orientation = j.value("orientation", g.orientation);
+	g.orientation = readUiTokenOrInt(j, "orientation", g.orientation, ecs::uiOrientFromToken);
 	g.collapsed = j.value("collapsed", g.collapsed);
 	reg.emplace_or_replace<ecs::CUiGroup>(e, std::move(g));
 	return true;
@@ -1327,8 +1347,8 @@ bool serializeUiControl(entt::registry& reg, entt::entity e, ordered_json& j) {
 	j["type"] = c.type;
 	j["enabled"] = c.enabled;
 	j["readOnly"] = c.readOnly;
-	if (c.widget != "auto") {
-		j["widget"] = c.widget;
+	if (c.widget != ecs::kUiWidgetAuto) {
+		j["widget"] = ecs::uiWidgetToken(c.widget);
 	}
 	if (c.min != 0.f) {
 		j["min"] = c.min;
@@ -1338,6 +1358,9 @@ bool serializeUiControl(entt::registry& reg, entt::entity e, ordered_json& j) {
 	}
 	if (c.step != 0.01f) {
 		j["step"] = c.step;
+	}
+	if (!c.options.empty()) {
+		j["options"] = c.options;
 	}
 	return true;
 }
@@ -1358,11 +1381,44 @@ bool deserializeUiControl(entt::registry& reg, entt::entity e, const ordered_jso
 	c.type = j.value("type", c.type);
 	c.enabled = j.value("enabled", c.enabled);
 	c.readOnly = j.value("readOnly", c.readOnly);
-	c.widget = j.value("widget", c.widget);
+	c.widget = readUiTokenOrInt(j, "widget", c.widget, ecs::uiWidgetFromToken);
 	c.min = j.value("min", c.min);
 	c.max = j.value("max", c.max);
 	c.step = j.value("step", c.step);
+	if (j.contains("options") && j["options"].is_array()) {
+		c.options = j["options"].get<std::vector<std::string>>();
+	}
 	reg.emplace_or_replace<ecs::CUiControl>(e, std::move(c));
+	return true;
+}
+
+bool serializeUiAction(entt::registry& reg, entt::entity e, ordered_json& j) {
+	if (!reg.all_of<ecs::CUiAction>(e)) {
+		return false;
+	}
+	const auto& a = reg.get<ecs::CUiAction>(e);
+	j["panel"] = entityIdString(static_cast<entt::entity>(a.panel));
+	if (a.group != 0) {
+		j["group"] = entityIdString(static_cast<entt::entity>(a.group));
+	}
+	j["order"] = a.order;
+	j["actionId"] = a.actionId;
+	j["enabled"] = a.enabled;
+	return true;
+}
+
+bool deserializeUiAction(entt::registry& reg, entt::entity e, const ordered_json& j) {
+	ecs::CUiAction a;
+	if (j.contains("panel") && j["panel"].is_string()) {
+		a.panel = static_cast<uint32_t>(entityIdFromString(j["panel"].get<std::string>()));
+	}
+	if (j.contains("group") && j["group"].is_string()) {
+		a.group = static_cast<uint32_t>(entityIdFromString(j["group"].get<std::string>()));
+	}
+	a.order = j.value("order", a.order);
+	a.actionId = j.value("actionId", a.actionId);
+	a.enabled = j.value("enabled", a.enabled);
+	reg.emplace_or_replace<ecs::CUiAction>(e, std::move(a));
 	return true;
 }
 
@@ -1384,6 +1440,11 @@ void remapUiRefs(entt::registry& reg, const EntityIdMap& idMap) {
 		remap(c.panel);
 		remap(c.group);
 		remap(c.target);
+	}
+	for (auto e : reg.view<ecs::CUiAction>()) {
+		auto& a = reg.get<ecs::CUiAction>(e);
+		remap(a.panel);
+		remap(a.group);
 	}
 }
 
@@ -2290,6 +2351,8 @@ void registerInto(project::ComponentSerializerRegistry& registry) {
 								 deserializeUiGroup, remapUiRefs);
 	addSerializer<ecs::CUiControl>(registry, "UiControl", "rig.ui.control", serializeUiControl,
 								   deserializeUiControl);
+	addSerializer<ecs::CUiAction>(registry, "UiAction", "rig.ui.action", serializeUiAction,
+								  deserializeUiAction);
 	addSerializer<ecs::CAssetRef>(registry, "AssetRef", "rig.media.asset_ref", serializeAssetRef,
 								  deserializeAssetRef);
 	addSerializer<ecs::CText>(
