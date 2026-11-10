@@ -5,6 +5,9 @@
 #include "CModLfo.h"
 #include "CTween.h"
 
+#include <string>
+#include <unordered_map>
+
 namespace rigkit {
 namespace {
 using project::ordered_json;
@@ -103,6 +106,30 @@ bool deserializeTween(entt::registry& reg, entt::entity e, const ordered_json& j
 	return true;
 }
 
+void remapName(std::string& value,
+			   const std::unordered_map<std::string, std::string>& nameByDocumentId) {
+	const auto it = nameByDocumentId.find(value);
+	if (it != nameByDocumentId.end()) {
+		value = it->second;
+	}
+}
+
+void remapBindingContractRefs(entt::registry& reg,
+							  const std::unordered_map<std::string, std::string>& nameByDocumentId) {
+	for (auto e : reg.view<ecs::CModBinding>()) {
+		auto& b = reg.get<ecs::CModBinding>(e);
+		remapName(b.source, nameByDocumentId);
+		remapName(b.target, nameByDocumentId);
+	}
+}
+
+void remapTweenContractRefs(entt::registry& reg,
+							const std::unordered_map<std::string, std::string>& nameByDocumentId) {
+	for (auto e : reg.view<ecs::CTween>()) {
+		remapName(reg.get<ecs::CTween>(e).target, nameByDocumentId);
+	}
+}
+
 } // namespace
 
 namespace anim {
@@ -111,9 +138,10 @@ void registerProjectSerializers(project::ComponentSerializerRegistry& registry) 
 	project::addSerializer<ecs::CModLfo>(registry, "ModLfo", "rig.mod.lfo", serializeModLfo,
 										 deserializeModLfo);
 	project::addSerializer<ecs::CModBinding>(registry, "ModBinding", "rig.mod.binding",
-											 serializeModBinding, deserializeModBinding);
+											 serializeModBinding, deserializeModBinding, {},
+											 remapBindingContractRefs);
 	project::addSerializer<ecs::CTween>(registry, "Tween", "rig.anim.tween", serializeTween,
-										deserializeTween);
+										deserializeTween, {}, remapTweenContractRefs);
 }
 
 } // namespace anim
