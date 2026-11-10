@@ -1,7 +1,7 @@
 #include "ComponentSerializers.h"
 
 #include "core/TypeJson.h"
-#include "ecs/components/CGuide.h"
+#include "CGuide.h"
 #include "AddSerializer.h"
 #include "CAnchor.h"
 #include "CArc.h"
