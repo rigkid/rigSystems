@@ -3,6 +3,7 @@
 #include "core/TypeJson.h"
 #include "ecs/components/CGuide.h"
 #include "AddSerializer.h"
+#include "CAnchor.h"
 #include "CArc.h"
 #include "CAssetRef.h"
 #include "CCamera.h"
@@ -2276,6 +2277,46 @@ bool deserializeCurve(entt::registry& reg, entt::entity e, const ordered_json& j
 	return true;
 }
 
+/**
+ * @brief `rig.spatial.anchor` from `CAnchor`.
+ * @details Top-left / min / zero offset is what an absent component means, so
+ * that value writes nothing. `height` and `offset` travel only when they leave
+ * those defaults.
+ */
+bool serializeAnchor(entt::registry& reg, entt::entity e, project::ordered_json& j) {
+	if (!reg.all_of<ecs::CAnchor>(e)) {
+		return false;
+	}
+	const auto& a = reg.get<ecs::CAnchor>(e);
+	if (a.isDefault()) {
+		return false;
+	}
+	j["point"] = ecs::CAnchor::pointToId(a.point);
+	if (a.height != ecs::CAnchor::kHeightMin) {
+		j["height"] = ecs::CAnchor::heightToId(a.height);
+	}
+	if (a.offset.x != 0.f || a.offset.y != 0.f) {
+		j["offset"] = vec2ToJson(a.offset);
+	}
+	return true;
+}
+
+bool deserializeAnchor(entt::registry& reg, entt::entity e, const project::ordered_json& j) {
+	if (!j.contains("point") || !j["point"].is_string()) {
+		return false;
+	}
+	ecs::CAnchor a;
+	a.point = ecs::CAnchor::pointFromId(j["point"].get<std::string>());
+	if (j.contains("height") && j["height"].is_string()) {
+		a.height = ecs::CAnchor::heightFromId(j["height"].get<std::string>());
+	}
+	if (j.contains("offset")) {
+		a.offset = vec2FromJson(j["offset"], a.offset);
+	}
+	reg.emplace_or_replace<ecs::CAnchor>(e, a);
+	return true;
+}
+
 void registerInto(project::ComponentSerializerRegistry& registry) {
 	using project::addBoolMemberSerializer;
 	using project::addMarkerSerializer;
@@ -2287,6 +2328,8 @@ void registerInto(project::ComponentSerializerRegistry& registry) {
 								   serializeTransform, deserializeTransform);
 	addSerializer<ecs::CRelationship>(registry, "Relationship", "rig.spatial.relationship",
 									  serializeRelationship, deserializeRelationship);
+	addSerializer<ecs::CAnchor>(registry, "Anchor", "rig.spatial.anchor", serializeAnchor,
+								deserializeAnchor);
 	addMarkerSerializer<ecs::CGroup>(registry, "Group", "rig.spatial.group");
 	addSerializer<ecs::CCamera>(registry, "Camera", "rig.spatial.camera", serializeCamera,
 								deserializeCamera);
