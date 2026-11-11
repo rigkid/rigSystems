@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <spdlog/spdlog.h>
 #include <string>
 
 namespace {
