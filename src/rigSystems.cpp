@@ -9,6 +9,7 @@
 #include "ComponentSerializers.h"
 #include "SCanvas.h"
 #include "SHierarchy.h"
+#include "SAnimClips.h"
 #include "SModulators.h"
 #include "SOrbitDrive.h"
 #include "SShapeRendering.h"
@@ -40,6 +41,7 @@ void rigSystems::setup() {
 	ecs->registerSystem("SCanvasUpdate", SystemPhase::Update, rigkit::ecs::SCanvasUpdate);
 	ecs->registerSystem("SModulators", SystemPhase::Update, rigkit::ecs::SModulators);
 	ecs->registerSystem("STweens", SystemPhase::Update, rigkit::ecs::STweens);
+	ecs->registerSystem("SAnimClips", SystemPhase::Update, rigkit::ecs::SAnimClips);
 	ecs->registerSystem("SOrbitDrive", SystemPhase::Update, rigkit::ecs::SOrbitDrive);
 
 	// FBO / active Canvas present (no-op when no active canvas).

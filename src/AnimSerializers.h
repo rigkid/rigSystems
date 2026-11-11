@@ -2,7 +2,8 @@
 
 /**
  * @file
- * @brief Register tween / LFO / binding codecs on a document serializer registry.
+ * @brief Register anim / mod codecs on a document serializer registry.
+ * @details Covers tween / LFO / binding plus skeleton / bind / skin / clip / track.
  */
 
 namespace rigkit {

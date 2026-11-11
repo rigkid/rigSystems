@@ -27,6 +27,7 @@
 #include "CRelationship.h"
 #include "CRenderBlend.h"
 #include "CRenderEnvironment.h"
+#include "CRenderMaterial.h"
 #include "CRenderVisibility.h"
 #include "CRing.h"
 #include "CSelectable.h"
@@ -57,6 +58,7 @@
 #include <cstdint>
 #include <functional>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace rigkit {
@@ -640,27 +642,56 @@ bool deserializeCamera(entt::registry& reg, entt::entity e, const ordered_json& 
 	return true;
 }
 
+const char* lightTypeString(ecs::CLight::Type type) {
+	switch (type) {
+	case ecs::CLight::Type::Point:
+		return "point";
+	case ecs::CLight::Type::Spot:
+		return "spot";
+	case ecs::CLight::Type::Directional:
+	default:
+		return "directional";
+	}
+}
+
+ecs::CLight::Type lightTypeFromString(const std::string& type) {
+	if (type == "point") {
+		return ecs::CLight::Type::Point;
+	}
+	if (type == "spot") {
+		return ecs::CLight::Type::Spot;
+	}
+	return ecs::CLight::Type::Directional;
+}
+
 bool serializeLight(entt::registry& reg, entt::entity e, ordered_json& j) {
 	if (!reg.all_of<ecs::CLight>(e)) {
 		return false;
 	}
 	const auto& l = reg.get<ecs::CLight>(e);
 	j["enabled"] = l.enabled;
-	j["type"] = (l.type == ecs::CLight::Type::Point) ? "point" : "directional";
+	j["type"] = lightTypeString(l.type);
 	j["rgb"] = rgbToJson({l.colorR, l.colorG, l.colorB});
 	j["intensity"] = l.intensity;
 	j["ambient"] = l.ambient;
 	j["banded"] = l.banded;
 	j["bands"] = l.bands;
+	if (l.range > 0.f) {
+		j["range"] = l.range;
+	}
+	if (l.type == ecs::CLight::Type::Spot) {
+		if (l.innerConeDegrees != 0.f) {
+			j["innerConeDegrees"] = l.innerConeDegrees;
+		}
+		j["outerConeDegrees"] = l.outerConeDegrees;
+	}
 	return true;
 }
 
 bool deserializeLight(entt::registry& reg, entt::entity e, const ordered_json& j) {
 	auto& l = reg.get_or_emplace<ecs::CLight>(e);
 	l.enabled = j.value("enabled", l.enabled);
-	l.type = (j.value("type", std::string("directional")) == "point")
-				 ? ecs::CLight::Type::Point
-				 : ecs::CLight::Type::Directional;
+	l.type = lightTypeFromString(j.value("type", std::string("directional")));
 	if (j.contains("rgb")) {
 		const glm::vec3 rgb = rgbFromJson(j["rgb"], {l.colorR, l.colorG, l.colorB});
 		l.colorR = rgb.r;
@@ -671,6 +702,9 @@ bool deserializeLight(entt::registry& reg, entt::entity e, const ordered_json& j
 	l.ambient = j.value("ambient", l.ambient);
 	l.banded = j.value("banded", l.banded);
 	l.bands = j.value("bands", l.bands);
+	l.range = j.value("range", l.range);
+	l.innerConeDegrees = j.value("innerConeDegrees", l.innerConeDegrees);
+	l.outerConeDegrees = j.value("outerConeDegrees", l.outerConeDegrees);
 	return true;
 }
 
@@ -728,6 +762,84 @@ void remapEnvironment(entt::registry& reg, const EntityIdMap& idMap) {
 		}
 		const auto it = idMap.find(static_cast<std::uint32_t>(env.hdri));
 		env.hdri = (it != idMap.end()) ? it->second : entt::null;
+	}
+}
+
+std::unordered_map<entt::entity, std::string> gPendingMaterialAlbedo;
+
+bool serializeRenderMaterial(entt::registry& reg, entt::entity e, ordered_json& j) {
+	if (!reg.all_of<ecs::CRenderMaterial>(e)) {
+		return false;
+	}
+	const auto& m = reg.get<ecs::CRenderMaterial>(e);
+	if (m.albedoR != 1.f || m.albedoG != 1.f || m.albedoB != 1.f) {
+		j["albedoRgb"] = rgbToJson({m.albedoR, m.albedoG, m.albedoB});
+	}
+	if (m.albedoMap != entt::null) {
+		j["albedoMap"] = entityIdString(m.albedoMap);
+	}
+	if (m.metallic != 0.f) {
+		j["metallic"] = m.metallic;
+	}
+	if (m.roughness != 1.f) {
+		j["roughness"] = m.roughness;
+	}
+	if (m.emissiveR != 0.f || m.emissiveG != 0.f || m.emissiveB != 0.f) {
+		j["emissive"] = rgbToJson({m.emissiveR, m.emissiveG, m.emissiveB});
+	}
+	return true;
+}
+
+bool deserializeRenderMaterial(entt::registry& reg, entt::entity e, const ordered_json& j) {
+	ecs::CRenderMaterial m;
+	if (j.contains("albedoRgb")) {
+		const glm::vec3 albedo = rgbFromJson(j["albedoRgb"], {1.f, 1.f, 1.f});
+		m.albedoR = albedo.r;
+		m.albedoG = albedo.g;
+		m.albedoB = albedo.b;
+	}
+	if (j.contains("albedoMap") && j["albedoMap"].is_string()) {
+		const auto id = j["albedoMap"].get<std::string>();
+		m.albedoMap = entityIdFromString(id);
+		if (m.albedoMap == entt::null && !id.empty()) {
+			gPendingMaterialAlbedo[e] = id;
+		}
+	}
+	m.metallic = j.value("metallic", m.metallic);
+	m.roughness = j.value("roughness", m.roughness);
+	if (j.contains("emissive")) {
+		const glm::vec3 emissive = rgbFromJson(j["emissive"], {0.f, 0.f, 0.f});
+		m.emissiveR = emissive.r;
+		m.emissiveG = emissive.g;
+		m.emissiveB = emissive.b;
+	}
+	reg.emplace_or_replace<ecs::CRenderMaterial>(e, m);
+	return true;
+}
+
+void remapRenderMaterial(entt::registry& reg, const EntityIdMap& idMap) {
+	for (auto entity : reg.view<ecs::CRenderMaterial>()) {
+		auto& m = reg.get<ecs::CRenderMaterial>(entity);
+		if (m.albedoMap == entt::null) {
+			continue;
+		}
+		const auto it = idMap.find(static_cast<std::uint32_t>(m.albedoMap));
+		m.albedoMap = (it != idMap.end()) ? it->second : entt::null;
+	}
+}
+
+void resolveRenderMaterial(entt::registry& reg,
+						   const std::unordered_map<std::string, entt::entity>& entityByDocumentId) {
+	for (auto it = gPendingMaterialAlbedo.begin(); it != gPendingMaterialAlbedo.end();) {
+		if (!reg.valid(it->first) || !reg.all_of<ecs::CRenderMaterial>(it->first)) {
+			it = gPendingMaterialAlbedo.erase(it);
+			continue;
+		}
+		const auto found = entityByDocumentId.find(it->second);
+		if (found != entityByDocumentId.end()) {
+			reg.get<ecs::CRenderMaterial>(it->first).albedoMap = found->second;
+		}
+		it = gPendingMaterialAlbedo.erase(it);
 	}
 }
 
@@ -2361,6 +2473,9 @@ void registerInto(project::ComponentSerializerRegistry& registry) {
 	addSerializer<ecs::CRenderEnvironment>(
 		registry, "RenderEnvironment", "rig.render.environment", serializeEnvironment,
 		deserializeEnvironment, remapEnvironment);
+	addSerializer<ecs::CRenderMaterial>(registry, "RenderMaterial", "rig.render.material",
+										serializeRenderMaterial, deserializeRenderMaterial,
+										remapRenderMaterial, {}, resolveRenderMaterial);
 	addSerializer<ecs::CDrawStyle>(registry, "StrokeStyle", "rig.paint.stroke_style",
 								   serializeStrokeStyle, deserializeStrokeStyle);
 	addSerializer<ecs::CDrawStyle>(registry, "StrokeStyleLegacy", "x.rigkit.stroke_style",

@@ -56,6 +56,8 @@ add_library(${PACK_NAME} STATIC
 	src/OrbitNav.h
 	src/STweens.cpp
 	src/STweens.h
+	src/SAnimClips.cpp
+	src/SAnimClips.h
 	src/SShapeRendering.cpp
 	src/SShapeRendering.h
 	src/ComponentSerializers.cpp
