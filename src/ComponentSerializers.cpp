@@ -554,9 +554,19 @@ bool serializeMesh(entt::registry& reg, entt::entity e, ordered_json& j) {
 bool deserializeMesh(entt::registry& reg, entt::entity e, const ordered_json& j) {
 	ecs::CMesh m;
 	m.mode = meshModeFromName(j.value("mode", std::string("Triangles")));
-	if (j.contains("positions") && j["positions"].is_array()) {
-		for (const auto& p : j["positions"]) {
-			m.positions.push_back(vec3FromJson(p));
+	// Contract wire is tightly packed float[] (x0,y0,z0,...). Kit-written
+	// round-trips may still carry nested [x,y,z] rows - accept both.
+	if (j.contains("positions") && j["positions"].is_array() && !j["positions"].empty()) {
+		const auto& positions = j["positions"];
+		if (positions[0].is_number()) {
+			for (size_t i = 0; i + 2 < positions.size(); i += 3) {
+				m.positions.emplace_back(positions[i].get<float>(), positions[i + 1].get<float>(),
+										 positions[i + 2].get<float>());
+			}
+		} else {
+			for (const auto& p : positions) {
+				m.positions.push_back(vec3FromJson(p));
+			}
 		}
 	}
 	if (j.contains("indices") && j["indices"].is_array()) {
@@ -578,13 +588,22 @@ bool deserializeMesh(entt::registry& reg, entt::entity e, const ordered_json& j)
 	if (j.contains("facePalette") && j["facePalette"].is_array()) {
 		m.facePalette = j["facePalette"].get<std::vector<uint8_t>>();
 	}
-	if (j.contains("texcoords") && j["texcoords"].is_array()) {
-		for (const auto& t : j["texcoords"]) {
-			m.texcoords.push_back(vec2FromJson(t));
+	if (j.contains("texcoords") && j["texcoords"].is_array() && !j["texcoords"].empty()) {
+		const auto& uvs = j["texcoords"];
+		if (uvs[0].is_number()) {
+			for (size_t i = 0; i + 1 < uvs.size(); i += 2) {
+				m.texcoords.emplace_back(uvs[i].get<float>(), uvs[i + 1].get<float>());
+			}
+		} else {
+			for (const auto& t : uvs) {
+				m.texcoords.push_back(vec2FromJson(t));
+			}
 		}
 	}
 	if (!m.loopSizes.empty()) {
 		ecs::meshTriangulate(m);
+	} else {
+		ecs::meshFinishFaces(m);
 	}
 	reg.emplace_or_replace<ecs::CMesh>(e, m);
 	return true;
