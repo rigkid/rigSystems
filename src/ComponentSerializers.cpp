@@ -1,7 +1,6 @@
 #include "ComponentSerializers.h"
 
 #include "core/TypeJson.h"
-#include "CGuide.h"
 #include "AddSerializer.h"
 #include "CAnchor.h"
 #include "CArc.h"
@@ -12,13 +11,25 @@
 #include "CEdgeSelection.h"
 #include "CEllipse.h"
 #include "CFaceSelection.h"
+#include "CFontFace.h"
 #include "CGroup.h"
+#include "CGuide.h"
+#include "CImageFit.h"
 #include "CIndexedAtlas.h"
+#include "CInstance.h"
 #include "CLayer.h"
 #include "CLight.h"
 #include "CLine.h"
 #include "CMesh.h"
 #include "CNurbsSurface.h"
+#include "CPaintClip.h"
+#include "CPaintFilter.h"
+#include "CPaintFilterStep.h"
+#include "CPaintMarker.h"
+#include "CPaintMarkers.h"
+#include "CPaintMask.h"
+#include "CPaintOrder.h"
+#include "CPaintPattern.h"
 #include "CPalette.h"
 #include "CPath.h"
 #include "CPolygon.h"
@@ -26,7 +37,6 @@
 #include "CRegularPolygon.h"
 #include "CRelationship.h"
 #include "CRenderBlend.h"
-#include "CImageFit.h"
 #include "CRenderEnvironment.h"
 #include "CRenderMaterial.h"
 #include "CRenderVisibility.h"
@@ -35,18 +45,9 @@
 #include "CSpline.h"
 #include "CSpline3d.h"
 #include "CStar.h"
+#include "CTags.h"
 #include "CText.h"
 #include "CTextPath.h"
-#include "CFontFace.h"
-#include "CInstance.h"
-#include "CPaintClip.h"
-#include "CPaintFilter.h"
-#include "CPaintFilterStep.h"
-#include "CPaintMask.h"
-#include "CPaintMarker.h"
-#include "CPaintMarkers.h"
-#include "CPaintOrder.h"
-#include "CPaintPattern.h"
 #include "CTransform.h"
 #include "CUiPanel.h"
 #include "EntityIdRemap.h"
@@ -830,8 +831,8 @@ void remapRenderMaterial(entt::registry& reg, const EntityIdMap& idMap) {
 	}
 }
 
-void resolveRenderMaterial(entt::registry& reg,
-						   const std::unordered_map<std::string, entt::entity>& entityByDocumentId) {
+void resolveRenderMaterial(
+	entt::registry& reg, const std::unordered_map<std::string, entt::entity>& entityByDocumentId) {
 	for (auto it = gPendingMaterialAlbedo.begin(); it != gPendingMaterialAlbedo.end();) {
 		if (!reg.valid(it->first) || !reg.all_of<ecs::CRenderMaterial>(it->first)) {
 			it = gPendingMaterialAlbedo.erase(it);
@@ -1281,6 +1282,32 @@ bool deserializePath(entt::registry& reg, entt::entity e, const ordered_json& j)
 	return true;
 }
 
+bool serializeTags(entt::registry& reg, entt::entity e, ordered_json& j) {
+	if (!reg.all_of<ecs::CTags>(e)) {
+		return false;
+	}
+	const auto& t = reg.get<ecs::CTags>(e);
+	j["tags"] = t.tags;
+	return true;
+}
+
+bool deserializeTags(entt::registry& reg, entt::entity e, const ordered_json& j) {
+	ecs::CTags t;
+	if (reg.all_of<ecs::CTags>(e)) {
+		t = reg.get<ecs::CTags>(e);
+	}
+	if (j.contains("tags") && j["tags"].is_array()) {
+		t.tags.clear();
+		for (const auto& entry : j["tags"]) {
+			if (entry.is_string()) {
+				t.add(entry.get<std::string>());
+			}
+		}
+	}
+	reg.emplace_or_replace<ecs::CTags>(e, std::move(t));
+	return true;
+}
+
 bool serializeLayer(entt::registry& reg, entt::entity e, ordered_json& j) {
 	if (!reg.all_of<ecs::CLayer>(e)) {
 		return false;
@@ -1356,8 +1383,8 @@ bool serializeImageFit(entt::registry& reg, entt::entity e, ordered_json& j) {
 	}
 	const auto& f = reg.get<ecs::CImageFit>(e);
 	const bool defaultFit = f.fit == ecs::CImageFit::Fit::Fill;
-	const bool defaultPos = std::fabs(f.positionX - 0.5f) < 1e-6f &&
-							std::fabs(f.positionY - 0.5f) < 1e-6f;
+	const bool defaultPos =
+		std::fabs(f.positionX - 0.5f) < 1e-6f && std::fabs(f.positionY - 0.5f) < 1e-6f;
 	const bool defaultOff = std::fabs(f.offsetX) < 1e-6f && std::fabs(f.offsetY) < 1e-6f;
 	const bool defaultScale = std::fabs(f.scale - 1.f) < 1e-6f;
 	const bool defaultInsets = std::fabs(f.insetTop) < 1e-6f && std::fabs(f.insetRight) < 1e-6f &&
@@ -1390,7 +1417,8 @@ bool serializeImageFit(entt::registry& reg, entt::entity e, ordered_json& j) {
 			std::fabs(f.insetTop - f.insetLeft) < 1e-6f) {
 			j["insets"] = f.insetTop;
 		} else {
-			j["insets"] = ordered_json::array({f.insetTop, f.insetRight, f.insetBottom, f.insetLeft});
+			j["insets"] =
+				ordered_json::array({f.insetTop, f.insetRight, f.insetBottom, f.insetLeft});
 		}
 	}
 	return true;
@@ -1764,8 +1792,8 @@ bool serializeText(entt::registry& reg, entt::entity e, ordered_json& j) {
 		j["anchor"] = t.anchor == ecs::CText::Anchor::Middle ? "middle" : "end";
 	}
 	if (t.writingMode != ecs::CText::WritingMode::HorizontalTb) {
-		j["writingMode"] = t.writingMode == ecs::CText::WritingMode::VerticalRl ? "vertical-rl"
-																			   : "vertical-lr";
+		j["writingMode"] =
+			t.writingMode == ecs::CText::WritingMode::VerticalRl ? "vertical-rl" : "vertical-lr";
 	}
 	if (t.direction == ecs::CText::Direction::Rtl) {
 		j["direction"] = "rtl";
@@ -1844,9 +1872,9 @@ bool deserializeText(entt::registry& reg, entt::entity e, const ordered_json& j)
 	t.strikeThrough = j.value("strikeThrough", false);
 	{
 		const std::string a = j.value("anchor", std::string("start"));
-		t.anchor = a == "middle"   ? ecs::CText::Anchor::Middle
-				   : a == "end"	   ? ecs::CText::Anchor::End
-								   : ecs::CText::Anchor::Start;
+		t.anchor = a == "middle" ? ecs::CText::Anchor::Middle
+				   : a == "end"	 ? ecs::CText::Anchor::End
+								 : ecs::CText::Anchor::Start;
 		const std::string wm = j.value("writingMode", std::string("horizontal-tb"));
 		t.writingMode = wm == "vertical-rl"	  ? ecs::CText::WritingMode::VerticalRl
 						: wm == "vertical-lr" ? ecs::CText::WritingMode::VerticalLr
@@ -1855,12 +1883,12 @@ bool deserializeText(entt::registry& reg, entt::entity e, const ordered_json& j)
 						  ? ecs::CText::Direction::Rtl
 						  : ecs::CText::Direction::Ltr;
 		const std::string b = j.value("baseline", std::string("auto"));
-		t.baseline = b == "alphabetic"	   ? ecs::CText::Baseline::Alphabetic
-					 : b == "middle"	   ? ecs::CText::Baseline::Middle
-					 : b == "hanging"	   ? ecs::CText::Baseline::Hanging
-					 : b == "ideographic"  ? ecs::CText::Baseline::Ideographic
-					 : b == "central"	   ? ecs::CText::Baseline::Central
-										   : ecs::CText::Baseline::Auto;
+		t.baseline = b == "alphabetic"	  ? ecs::CText::Baseline::Alphabetic
+					 : b == "middle"	  ? ecs::CText::Baseline::Middle
+					 : b == "hanging"	  ? ecs::CText::Baseline::Hanging
+					 : b == "ideographic" ? ecs::CText::Baseline::Ideographic
+					 : b == "central"	  ? ecs::CText::Baseline::Central
+										  : ecs::CText::Baseline::Auto;
 	}
 	if (j.contains("placements") && j["placements"].is_array()) {
 		for (const auto& row : j["placements"]) {
@@ -2002,11 +2030,10 @@ bool deserializeTextPath(entt::registry& reg, entt::entity e, const ordered_json
 	t.method = j.value("method", std::string("align")) == "stretch"
 				   ? ecs::CTextPath::Method::Stretch
 				   : ecs::CTextPath::Method::Align;
-	t.spacing = j.value("spacing", std::string("exact")) == "auto"
-					? ecs::CTextPath::Spacing::Auto
-					: ecs::CTextPath::Spacing::Exact;
+	t.spacing = j.value("spacing", std::string("exact")) == "auto" ? ecs::CTextPath::Spacing::Auto
+																   : ecs::CTextPath::Spacing::Exact;
 	t.side = j.value("side", std::string("left")) == "right" ? ecs::CTextPath::Side::Right
-															: ecs::CTextPath::Side::Left;
+															 : ecs::CTextPath::Side::Left;
 	reg.emplace_or_replace<ecs::CTextPath>(e, t);
 	return true;
 }
@@ -2548,9 +2575,9 @@ void registerInto(project::ComponentSerializerRegistry& registry) {
 								   serializeDrawStyle, deserializeDrawStyle);
 	addSerializer<ecs::CLight>(registry, "Light", "rig.render.light", serializeLight,
 							   deserializeLight);
-	addSerializer<ecs::CRenderEnvironment>(
-		registry, "RenderEnvironment", "rig.render.environment", serializeEnvironment,
-		deserializeEnvironment, remapEnvironment);
+	addSerializer<ecs::CRenderEnvironment>(registry, "RenderEnvironment", "rig.render.environment",
+										   serializeEnvironment, deserializeEnvironment,
+										   remapEnvironment);
 	addSerializer<ecs::CRenderMaterial>(registry, "RenderMaterial", "rig.render.material",
 										serializeRenderMaterial, deserializeRenderMaterial,
 										remapRenderMaterial, {}, resolveRenderMaterial);
@@ -2591,6 +2618,7 @@ void registerInto(project::ComponentSerializerRegistry& registry) {
 							   deserializeLayer);
 	addSerializer<ecs::CLayer>(registry, "LayerVisible", "x.rigkit.layer_visible",
 							   serializeLayerVisible, deserializeLayerVisible);
+	addSerializer<ecs::CTags>(registry, "Tags", "rig.meta.tags", serializeTags, deserializeTags);
 	addSerializer<ecs::CRenderVisibility>(registry, "RenderVisibility", "rig.render.visibility",
 										  serializeRenderVisibility, deserializeRenderVisibility);
 	addSerializer<ecs::CRenderBlend>(registry, "RenderBlend", "rig.render.blend",
@@ -2626,7 +2654,8 @@ void registerInto(project::ComponentSerializerRegistry& registry) {
 		registry, "PaintMask", "rig.paint.mask", serializePaintMask, deserializePaintMask,
 		[](entt::registry& reg, const EntityIdMap& idMap) { remapPaintMask(reg, idMap); });
 	addSerializer<ecs::CPaintMarkers>(
-		registry, "PaintMarkers", "rig.paint.markers", serializePaintMarkers, deserializePaintMarkers,
+		registry, "PaintMarkers", "rig.paint.markers", serializePaintMarkers,
+		deserializePaintMarkers,
 		[](entt::registry& reg, const EntityIdMap& idMap) { remapPaintMarkers(reg, idMap); });
 	addSerializer<ecs::CPaintMarker>(registry, "PaintMarker", "rig.paint.marker",
 									 serializePaintMarker, deserializePaintMarker);
