@@ -26,6 +26,7 @@
 #include "CRegularPolygon.h"
 #include "CRelationship.h"
 #include "CRenderBlend.h"
+#include "CImageFit.h"
 #include "CRenderEnvironment.h"
 #include "CRenderMaterial.h"
 #include "CRenderVisibility.h"
@@ -55,6 +56,7 @@
 #include "ProjectJson.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <functional>
 #include <string>
@@ -1348,6 +1350,82 @@ bool deserializeRenderVisibility(entt::registry& reg, entt::entity e, const orde
 	return true;
 }
 
+bool serializeImageFit(entt::registry& reg, entt::entity e, ordered_json& j) {
+	if (!reg.all_of<ecs::CImageFit>(e)) {
+		return false;
+	}
+	const auto& f = reg.get<ecs::CImageFit>(e);
+	const bool defaultFit = f.fit == ecs::CImageFit::Fit::Fill;
+	const bool defaultPos = std::fabs(f.positionX - 0.5f) < 1e-6f &&
+							std::fabs(f.positionY - 0.5f) < 1e-6f;
+	const bool defaultOff = std::fabs(f.offsetX) < 1e-6f && std::fabs(f.offsetY) < 1e-6f;
+	const bool defaultScale = std::fabs(f.scale - 1.f) < 1e-6f;
+	const bool defaultInsets = std::fabs(f.insetTop) < 1e-6f && std::fabs(f.insetRight) < 1e-6f &&
+							   std::fabs(f.insetBottom) < 1e-6f && std::fabs(f.insetLeft) < 1e-6f;
+	if (defaultFit && defaultPos && defaultOff && defaultScale && defaultInsets) {
+		// Explicit empty object still marks the component present for hosts that care.
+		return true;
+	}
+	if (!defaultFit) {
+		j["fit"] = ecs::imageFitToken(f.fit);
+	}
+	if (std::fabs(f.positionX - 0.5f) >= 1e-6f) {
+		j["positionX"] = f.positionX;
+	}
+	if (std::fabs(f.positionY - 0.5f) >= 1e-6f) {
+		j["positionY"] = f.positionY;
+	}
+	if (std::fabs(f.offsetX) >= 1e-6f) {
+		j["offsetX"] = f.offsetX;
+	}
+	if (std::fabs(f.offsetY) >= 1e-6f) {
+		j["offsetY"] = f.offsetY;
+	}
+	if (!defaultScale) {
+		j["scale"] = f.scale;
+	}
+	if (!defaultInsets) {
+		if (std::fabs(f.insetTop - f.insetRight) < 1e-6f &&
+			std::fabs(f.insetTop - f.insetBottom) < 1e-6f &&
+			std::fabs(f.insetTop - f.insetLeft) < 1e-6f) {
+			j["insets"] = f.insetTop;
+		} else {
+			j["insets"] = ordered_json::array({f.insetTop, f.insetRight, f.insetBottom, f.insetLeft});
+		}
+	}
+	return true;
+}
+
+bool deserializeImageFit(entt::registry& reg, entt::entity e, const ordered_json& j) {
+	ecs::CImageFit f;
+	if (reg.all_of<ecs::CImageFit>(e)) {
+		f = reg.get<ecs::CImageFit>(e);
+	}
+	if (j.contains("fit") && j["fit"].is_string()) {
+		f.fit = ecs::imageFitFromToken(j["fit"].get<std::string>());
+	}
+	f.positionX = j.value("positionX", f.positionX);
+	f.positionY = j.value("positionY", f.positionY);
+	f.offsetX = j.value("offsetX", f.offsetX);
+	f.offsetY = j.value("offsetY", f.offsetY);
+	f.scale = j.value("scale", f.scale);
+	if (j.contains("insets")) {
+		const auto& in = j["insets"];
+		if (in.is_number()) {
+			const float v = in.get<float>();
+			f.insetTop = f.insetRight = f.insetBottom = f.insetLeft = v;
+		} else if (in.is_array() && !in.empty()) {
+			const auto n = in.size();
+			f.insetTop = in[0].get<float>();
+			f.insetRight = n > 1 ? in[1].get<float>() : f.insetTop;
+			f.insetBottom = n > 2 ? in[2].get<float>() : f.insetTop;
+			f.insetLeft = n > 3 ? in[3].get<float>() : f.insetRight;
+		}
+	}
+	reg.emplace_or_replace<ecs::CImageFit>(e, f);
+	return true;
+}
+
 bool serializeRenderBlend(entt::registry& reg, entt::entity e, ordered_json& j) {
 	if (!reg.all_of<ecs::CRenderBlend>(e)) {
 		return false;
@@ -2517,6 +2595,8 @@ void registerInto(project::ComponentSerializerRegistry& registry) {
 										  serializeRenderVisibility, deserializeRenderVisibility);
 	addSerializer<ecs::CRenderBlend>(registry, "RenderBlend", "rig.render.blend",
 									 serializeRenderBlend, deserializeRenderBlend);
+	addSerializer<ecs::CImageFit>(registry, "ImageFit", "rig.render.image_fit", serializeImageFit,
+								  deserializeImageFit);
 	addSerializer<ecs::CUiPanel>(registry, "UiPanel", "rig.ui.panel", serializeUiPanel,
 								 deserializeUiPanel);
 	addSerializer<ecs::CUiGroup>(registry, "UiGroup", "rig.ui.group", serializeUiGroup,
