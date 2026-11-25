@@ -8,22 +8,13 @@
 #include "SHierarchy.h"
 #include "rig/create.h"
 
-#include <algorithm>
-#include <cmath>
 #include <glm/gtc/matrix_inverse.hpp>
 #include <glm/gtc/quaternion.hpp>
+#include <algorithm>
+#include <cmath>
 
 namespace rig {
 namespace {
-
-glm::vec3 orbitEye(const rigkit::ecs::COrbitDrive& orbit) {
-	const float cp = std::cos(orbit.pitch);
-	const float sp = std::sin(orbit.pitch);
-	const float sy = std::sin(orbit.yaw);
-	const float cy = std::cos(orbit.yaw);
-	const float r = orbit.radius;
-	return orbit.target + glm::vec3{sy * cp * r, sp * r, cy * cp * r};
-}
 
 void clampOrbit(rigkit::ecs::COrbitDrive& orbit) {
 	orbit.pitch = std::clamp(orbit.pitch, -kOrbitPitchLimit, kOrbitPitchLimit);
@@ -75,6 +66,33 @@ bool meshWorldBounds(rigkit::MEcs& ecs, entt::entity e, glm::vec3& bmin, glm::ve
 
 } // namespace
 
+glm::vec3 orbitEye(const rigkit::ecs::COrbitDrive& orbit) {
+	const float cp = std::cos(orbit.pitch);
+	const float sp = std::sin(orbit.pitch);
+	const float sy = std::sin(orbit.yaw);
+	const float cy = std::cos(orbit.yaw);
+	const float r = orbit.radius;
+	if (orbit.worldUp == rigkit::ecs::COrbitDrive::WorldUp::Z) {
+		// Host Space: yaw about +Z, pitch 0 in the XY plane, yaw 0 from -Y (Front).
+		return orbit.target + glm::vec3{sy * cp * r, -cy * cp * r, sp * r};
+	}
+	return orbit.target + glm::vec3{sy * cp * r, sp * r, cy * cp * r};
+}
+
+void orbitViewAxes(const rigkit::ecs::COrbitDrive& orbit, glm::vec3& outRight, glm::vec3& outUp) {
+	const float cp = std::cos(orbit.pitch);
+	const float sp = std::sin(orbit.pitch);
+	const float sy = std::sin(orbit.yaw);
+	const float cy = std::cos(orbit.yaw);
+	if (orbit.worldUp == rigkit::ecs::COrbitDrive::WorldUp::Z) {
+		outRight = glm::vec3{cy, sy, 0.f};
+		outUp = glm::vec3{-sy * sp, cy * sp, cp};
+		return;
+	}
+	outRight = glm::vec3{cy, 0.f, -sy};
+	outUp = glm::vec3{-sy * sp, cp, -cy * sp};
+}
+
 void orbitApply(rigkit::MEcs& ecs, entt::entity cam) {
 	if (cam == entt::null || !ecs.hasComponent<rigkit::ecs::COrbitDrive>(cam) ||
 		!ecs.hasComponent<rigkit::ecs::CTransform>(cam)) {
@@ -82,7 +100,16 @@ void orbitApply(rigkit::MEcs& ecs, entt::entity cam) {
 	}
 	auto& orbit = ecs.getComponent<rigkit::ecs::COrbitDrive>(cam);
 	clampOrbit(orbit);
-	lookAt(ecs.getComponent<rigkit::ecs::CTransform>(cam), orbitEye(orbit), orbit.target);
+	const glm::vec3 eye = orbitEye(orbit);
+	glm::vec3 up = orbit.worldUpVec();
+	const glm::vec3 toTarget = orbit.target - eye;
+	const float len = glm::length(toTarget);
+	if (len > 1e-6f && std::abs(glm::dot(toTarget / len, up)) > 0.995f) {
+		// Looking along worldUp (Top / Bottom) - pick a stable screen-up.
+		up = orbit.worldUp == rigkit::ecs::COrbitDrive::WorldUp::Z ? glm::vec3{0.f, 1.f, 0.f}
+																   : glm::vec3{0.f, 0.f, -1.f};
+	}
+	lookAt(ecs.getComponent<rigkit::ecs::CTransform>(cam), eye, orbit.target, up);
 	syncOrbitClips(ecs, cam, orbit);
 }
 
@@ -97,7 +124,19 @@ void orbitNavigate(rigkit::MEcs& ecs, entt::entity cam, const OrbitNavFrame& fra
 	// Wheel is not a drag - apply even when gizmo/UI blocked the buttons.
 	if (std::fabs(frame.wheel) > 1e-4f) {
 		orbit.enabled = false;
-		const float factor = frame.wheel > 0.f ? 0.9f : 1.1f;
+		float factor = frame.wheel > 0.f ? 0.9f : 1.1f;
+		if (frame.havePivot && factor < 1.f) {
+			// Zoom-to-cursor scales eye-to-pivot; stop before the near plane eats
+			// the detail under the mouse (same rule Toolpath used pre-OrbitNav).
+			constexpr float kMinPivotStandoffMm = 2.f;
+			const glm::vec3 eye = ecs.hasComponent<rigkit::ecs::CTransform>(cam)
+									  ? ecs.getComponent<rigkit::ecs::CTransform>(cam).position
+									  : orbitEye(orbit);
+			const float dist = glm::length(eye - frame.pivot);
+			if (dist > 1e-6f) {
+				factor = std::max(factor, std::min(kMinPivotStandoffMm / dist, 1.f));
+			}
+		}
 		if (frame.havePivot) {
 			// Zoom anchored under the cursor: scale the rig about the pivot so
 			// the picked point keeps its screen position.
@@ -139,40 +178,42 @@ void orbitNavigate(rigkit::MEcs& ecs, entt::entity cam, const OrbitNavFrame& fra
 					orbit.radius *= factor;
 				}
 			} else if (frame.pan) {
-				const float cp = std::cos(orbit.pitch);
-				const float sp = std::sin(orbit.pitch);
-				const float sy = std::sin(orbit.yaw);
-				const float cy = std::cos(orbit.yaw);
-				const glm::vec3 right{cy, 0.f, -sy};
-				const glm::vec3 up{-sy * sp, cp, -cy * sp};
-				// Map pixels to world on the plane through the target so truck
-				// speed matches what is under the cursor (and stays sane on HiDPI).
+				glm::vec3 right{};
+				glm::vec3 up{};
+				orbitViewAxes(orbit, right, up);
 				float worldPerPixel = orbit.radius * 0.0025f;
 				if (frame.viewH > 1.f && ecs.hasComponent<rigkit::ecs::CCamera>(cam)) {
 					const auto& camPod = ecs.getComponent<rigkit::ecs::CCamera>(cam);
 					if (camPod.projection == rigkit::ecs::CCamera::Projection::Orthographic) {
 						worldPerPixel = camPod.orthoHeight / frame.viewH;
 					} else {
-						const float halfFov =
-							glm::radians(camPod.fovYDegrees) * 0.5f;
-						worldPerPixel =
-							(2.f * orbit.radius * std::tan(halfFov)) / frame.viewH;
+						const float halfFov = glm::radians(camPod.fovYDegrees) * 0.5f;
+						worldPerPixel = (2.f * orbit.radius * std::tan(halfFov)) / frame.viewH;
 					}
 				}
-				orbit.target += (-dx * right + dy * up) * worldPerPixel;
+				orbit.target +=
+					orbitTruckDelta(frame.presentOrigin, right, up, dx, dy, worldPerPixel);
 			} else {
-				const float dYaw = -dx * 0.005f;
+				// Drag right swings the eye right (yaw -dx). Drag down raises the
+				// eye (pitch +dy) for this spherical drive. Soften when ortho is
+				// zoomed in so a tight frame does not fling the view.
+				float tumble = 0.005f;
+				if (cameraIsOrtho(ecs, cam) && frame.viewH > 1.f &&
+					ecs.hasComponent<rigkit::ecs::CCamera>(cam)) {
+					const float mmPerPx =
+						ecs.getComponent<rigkit::ecs::CCamera>(cam).orthoHeight / frame.viewH;
+					// Full rate around 0.5 mm/px (overview). Floor so a macro
+					// zoom still tumbles, just not at overview speed.
+					tumble *= std::clamp(mmPerPx / 0.5f, 0.12f, 1.f);
+				}
+				const float dYaw = -dx * tumble;
 				const float newPitch =
-					std::clamp(orbit.pitch + dy * 0.005f, -kOrbitPitchLimit, kOrbitPitchLimit);
+					std::clamp(orbit.pitch + dy * tumble, -kOrbitPitchLimit, kOrbitPitchLimit);
 				if (state.havePivot) {
-					// Rotate the whole rig about the pivot picked at press so
-					// the content under the cursor stays the centre of the
-					// tumble: yaw about world up through the pivot, pitch about
-					// camera right through it, target riding the same rotation.
-					// The pitch angle flips because rotating about +right lowers
-					// the eye (pitch decreases) in this rig.
-					const glm::vec3 right{std::cos(orbit.yaw), 0.f, -std::sin(orbit.yaw)};
-					const glm::quat rot = glm::angleAxis(dYaw, glm::vec3(0.f, 1.f, 0.f)) *
+					glm::vec3 right{};
+					glm::vec3 unusedUp{};
+					orbitViewAxes(orbit, right, unusedUp);
+					const glm::quat rot = glm::angleAxis(dYaw, orbit.worldUpVec()) *
 										  glm::angleAxis(orbit.pitch - newPitch, right);
 					orbit.target = state.pivot + rot * (orbit.target - state.pivot);
 				}
@@ -190,10 +231,12 @@ glm::vec3 orbitPickPivot(rigkit::MEcs& ecs, entt::entity cam, float ndcX, float 
 						 float aspect) {
 	glm::vec3 target{0.f};
 	float radius = 0.f;
+	glm::vec3 up{0.f, 1.f, 0.f};
 	if (cam != entt::null && ecs.hasComponent<rigkit::ecs::COrbitDrive>(cam)) {
 		const auto& orbit = ecs.getComponent<rigkit::ecs::COrbitDrive>(cam);
 		target = orbit.target;
 		radius = orbit.radius;
+		up = orbit.worldUpVec();
 	}
 	if (cam == entt::null || !ecs.hasComponent<rigkit::ecs::CCamera>(cam) ||
 		!ecs.hasComponent<rigkit::ecs::CTransform>(cam)) {
@@ -212,8 +255,10 @@ glm::vec3 orbitPickPivot(rigkit::MEcs& ecs, entt::entity cam, float ndcX, float 
 	const glm::vec3 origin{a};
 	const glm::vec3 dir = glm::normalize(glm::vec3(b - a));
 
-	if (std::abs(dir.y) > 1e-4f) {
-		const float t = -origin.y / dir.y;
+	// Ground plane through target, normal = worldUp (Y=0 CAD / Z=0 Host Space).
+	const float denomUp = glm::dot(dir, up);
+	if (std::abs(denomUp) > 1e-4f) {
+		const float t = glm::dot(target - origin, up) / denomUp;
 		if (t > 0.f && (radius <= 0.f || t < 16.f * radius)) {
 			return origin + dir * t;
 		}
@@ -275,11 +320,16 @@ void orbitFromView(rigkit::ecs::COrbitDrive& orbit, const glm::mat4& view,
 		return;
 	}
 	orbit.radius = r;
-	orbit.yaw = std::atan2(off.x, off.z);
-	orbit.pitch = std::asin(std::clamp(off.y / r, -1.f, 1.f));
+	if (orbit.worldUp == rigkit::ecs::COrbitDrive::WorldUp::Z) {
+		orbit.yaw = std::atan2(off.x, -off.y);
+		orbit.pitch = std::asin(std::clamp(off.z / r, -1.f, 1.f));
+	} else {
+		orbit.yaw = std::atan2(off.x, off.z);
+		orbit.pitch = std::asin(std::clamp(off.y / r, -1.f, 1.f));
+	}
 	orbit.enabled = false;
 	clampOrbit(orbit);
-	lookAt(camXf, eye, orbit.target);
+	lookAt(camXf, eye, orbit.target, orbit.worldUpVec());
 }
 
 } // namespace rig
